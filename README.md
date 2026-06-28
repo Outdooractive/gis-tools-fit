@@ -6,11 +6,11 @@
 
 # GISToolsFIT
 
-FIT (Flexible and Interoperable Data Transfer) file read support for Swift, built on top of [**gis-tools**](https://github.com/Outdooractive/gis-tools). Parses Garmin FIT activity files into typed `FeatureCollection` objects — **no Garmin SDK required**, pure Swift implementation based on the public FIT protocol specification.
+FIT (Flexible and Interoperable Data Transfer) file read support for Swift, built on top of [**gis-tools**](https://github.com/Outdooractive/gis-tools). Parses Garmin FIT activity files into typed `FeatureCollection` objects, pure Swift implementation based on the public FIT protocol specification.
 
 ## Features
 
-- Pure Swift FIT decoder — no external dependencies, no Garmin SDK code, no license issues
+- Pure Swift FIT decoder — no external dependencies
 - Reads FIT 2.0 files with CRC validation
 - Record points → `Feature<MultiLineString>` with per-point sensor data as parallel arrays
 - Lap boundaries split the track into `MultiLineString` segments
@@ -19,8 +19,6 @@ FIT (Flexible and Interoperable Data Transfer) file read support for Swift, buil
 - **Typed convenience API** on `Feature` and `FeatureCollection` — no manual dictionary casting
 - `fitPointFeatures()` → expand track into individual `Point` features with each record's sensor data
 - Time-window, distance-window, and fractional-window slicing of point data
-- **Zero Garmin code**: clean-room implementation of the FIT binary protocol
-- Works on all platforms supported by Swift (Linux, macOS, iOS, tvOS, watchOS, Wasm)
 
 ## Requirements
 
@@ -151,16 +149,6 @@ let activity = fc.fitActivity
 print(fc.fitSport)  // e.g. "Cycling"
 ```
 
-### Coordinate math helpers
-
-```swift
-// Semicircle → degrees conversion
-let lat = FITDegreesFromSemicircles(1073741824)   // 90.0
-
-// FIT timestamp → Date
-let date = FITDateFromTimestamp(500000)            // 2005-10-26 21:53:20
-```
-
 ### Per-point array reference
 
 | Property | Type | FIT Field |
@@ -208,17 +196,6 @@ let date = FITDateFromTimestamp(500000)            // 2005-10-26 21:53:20
 - **Developer fields**: parsed but not exposed via typed API
 - **Large files**: all messages are decoded in memory at once; files with 500K+ records may use significant memory
 - **No Garmin SDK**: this is a clean-room implementation of the FIT protocol; edge cases in vendor-specific extensions may not be handled
-
-## How it works
-
-The FIT decoder is a pure Swift binary parser that implements the FIT 2.0 protocol:
-
-1. **File header**: 12-byte header with protocol version, profile version, data size, and ".FIT" magic
-2. **Definition messages**: map local message numbers to global message numbers with field layouts
-3. **Data messages**: decoded using the active definitions, with proper type handling (sint8, uint16, sint32, float32, etc.)
-4. **CRC validation**: CCITT CRC-16 check at the end of the file
-
-No Garmin code is used. The implementation is based on the publicly available FIT Protocol specification and the FIT Profile field definitions.
 
 ## Contributing
 
