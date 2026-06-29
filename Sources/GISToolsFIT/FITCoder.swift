@@ -73,14 +73,14 @@ public enum FITCoder {
         var activityMeta: [String: Sendable] = [:]
         var deviceMeta: [String: Sendable] = [:]
 
-        // Per-point sensor data arrays (parallel to recordPoints)
-        var heartRates: [Int] = []
-        var cadences: [Int] = []
-        var powers: [Int] = []
-        var speeds: [Double] = []
-        var temperatures: [Double] = []
-        var altitudes: [Double] = []
-        var timestamps: [UInt32] = []
+        // Per-point sensor data arrays (aligned to record order)
+        var heartRates: [Int?] = []
+        var cadences: [Int?] = []
+        var powers: [Int?] = []
+        var speeds: [Double?] = []
+        var temperatures: [Double?] = []
+        var altitudes: [Double?] = []
+        var timestamps: [UInt32?] = []
 
         for msg in messages {
             let messageType = FITProfile.MesgNum(msg.globalMessageNumber)
@@ -91,14 +91,21 @@ public enum FITCoder {
                 else { break }
                 recordPoints.append((lat, lon, msg.fields))
 
-                // Extract per-point sensor data
+                // Extract per-point sensor data — always append per record
                 if let v = msg.fields[3] as? UInt8 { heartRates.append(Int(v)) }
+                else { heartRates.append(nil) }
                 if let v = msg.fields[4] as? UInt8 { cadences.append(Int(v)) }
+                else { cadences.append(nil) }
                 if let v = msg.fields[7] as? UInt16 { powers.append(Int(v)) }
+                else { powers.append(nil) }
                 if let v = msg.fields[6] as? UInt16 { speeds.append(Double(v) / 1000.0) }
+                else { speeds.append(nil) }
                 if let v = msg.fields[139] as? Int8 { temperatures.append(Double(v)) }
+                else { temperatures.append(nil) }
                 if let v = msg.fields[2] as? UInt16 { altitudes.append(Double(v) / 5.0 - 500.0) }
+                else { altitudes.append(nil) }
                 if let v = msg.fields[253] as? UInt32 { timestamps.append(v) }
+                else { timestamps.append(nil) }
 
             case .lap:
                 lapStarts.append(recordPoints.count)
@@ -129,14 +136,14 @@ public enum FITCoder {
                 feature.properties.merge(sessionMeta) { (_, new) in new }
             }
 
-            // Store per-point sensor arrays
-            if !heartRates.isEmpty { feature.properties["fit_heart_rates"] = heartRates }
-            if !cadences.isEmpty { feature.properties["fit_cadences"] = cadences }
-            if !powers.isEmpty { feature.properties["fit_powers"] = powers }
-            if !speeds.isEmpty { feature.properties["fit_speeds"] = speeds }
-            if !temperatures.isEmpty { feature.properties["fit_temperatures"] = temperatures }
-            if !altitudes.isEmpty { feature.properties["fit_altitudes"] = altitudes }
-            if !timestamps.isEmpty { feature.properties["fit_timestamps"] = timestamps }
+            // Store per-point sensor arrays (only if at least one non-nil)
+            if heartRates.contains(where: { $0 != nil }) { feature.properties["fit_heart_rates"] = heartRates }
+            if cadences.contains(where: { $0 != nil }) { feature.properties["fit_cadences"] = cadences }
+            if powers.contains(where: { $0 != nil }) { feature.properties["fit_powers"] = powers }
+            if speeds.contains(where: { $0 != nil }) { feature.properties["fit_speeds"] = speeds }
+            if temperatures.contains(where: { $0 != nil }) { feature.properties["fit_temperatures"] = temperatures }
+            if altitudes.contains(where: { $0 != nil }) { feature.properties["fit_altitudes"] = altitudes }
+            if timestamps.contains(where: { $0 != nil }) { feature.properties["fit_timestamps"] = timestamps }
 
             features.append(feature)
         }

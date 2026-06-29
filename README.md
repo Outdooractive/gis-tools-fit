@@ -71,17 +71,20 @@ print("\(multiLine.lineStrings.flatMap { $0.coordinates }.count) total points")
 Per-point arrays are indexed parallel to the flattened `MultiLineString` coordinates. For Garmin devices, every record contains all sensor fields, so the arrays always align:
 
 ```swift
-let hr = track.fitHeartRates      // [Int]? — heart rate per track point
-let cad = track.fitCadences        // [Int]? — cadence per track point
-let pw = track.fitPowers           // [Int]? — power in watts
-let spd = track.fitSpeeds          // [Double]? — speed in m/s
-let tmp = track.fitTemperatures    // [Double]? — temperature in °C
-let alt = track.fitAltitudes       // [Double]? — altitude in meters
-let ts = track.fitTimestamps       // [Date]? — timestamps per point
+let hr = track.fitHeartRates      // [Int?]? — heart rate per track point
+let cad = track.fitCadences        // [Int?]? — cadence per track point
+let pw = track.fitPowers           // [Int?]? — power in watts
+let spd = track.fitSpeeds          // [Double?]? — speed in m/s
+let tmp = track.fitTemperatures    // [Double?]? — temperature in °C
+let alt = track.fitAltitudes       // [Double?]? — altitude in meters
+let ts = track.fitTimestamps       // [Date?]? — timestamps per point
 
 // Index i in the arrays → coordinate[i] in the flattened MultiLineString
+// nil means no data recorded for that sensor at that point
 for i in 0..<(track.fitHeartRates?.count ?? 0) {
-    print("Point \(i): HR=\(hr![i]), cad=\(cad![i]), power=\(pw![i])")
+    if let hr = hr[i], let cad = cad[i], let pw = pw[i] {
+        print("Point \(i): HR=\(hr), cad=\(cad), power=\(pw)")
+    }
 }
 ```
 
@@ -126,6 +129,40 @@ let lastKm = track.fitPointFeatures(from: totalMeters - 1000.0, to: totalMeters)
 let midThird = track.fitPointFeatures(fraction: 0.33, to: 0.66)
 ```
 
+### Reconstructing a track from point features
+
+Convert a `FeatureCollection` of Point features (from `fitPointFeatures()`) back into a `Feature<MultiLineString>` track with per-point sensor arrays rebuilt:
+
+```swift
+let pts = track.fitPointFeatures()
+
+// Via FeatureCollection:
+let rebuilt = pts.fitTrackFromPointFeatures()
+rebuilt?.fitHeartRates?[0]   // 120
+rebuilt?.fitPowers?[2]        // 280
+
+// Via Feature convenience init:
+let track = Feature(fitTrackFrom: pts)
+track?.fitCadences?[1]        // 90
+```
+
+Non-Point features are silently skipped. Returns `nil` if no Point features exist.
+
+### FeatureCollection convenience properties
+
+```swift
+// Quick access to record features
+let records = fc.fitRecords
+records[0].properties["heart_rate"]  // 120
+
+// Device and activity metadata
+let device = fc.fitDevice
+print(device?["manufacturer"])  // e.g. "Garmin"
+
+let activity = fc.fitActivity
+print(fc.fitSport)             // e.g. "Cycling"
+```
+
 ### Summary data
 
 ```swift
@@ -135,31 +172,17 @@ print(track.fitMaxHeartRate)        // Int?
 print(track.fitTotalDistance)       // Double? — meters
 print(track.fitTotalCalories)       // Int? — kcal
 ```
-
-### Device and activity metadata
-
-```swift
-// Device info from file_id message
-let device = fc.fitDevice
-print(device?["manufacturer"] as? String)  // e.g. "Garmin"
-print(device?["product"] as? String)
-
-// Activity summary
-let activity = fc.fitActivity
-print(fc.fitSport)  // e.g. "Cycling"
-```
-
 ### Per-point array reference
 
 | Property | Type | FIT Field |
 |---|---|---|
-| `fitHeartRates` | `[Int]?` | `record.heart_rate` |
-| `fitCadences` | `[Int]?` | `record.cadence` |
-| `fitPowers` | `[Int]?` | `record.power` |
-| `fitSpeeds` | `[Double]?` | `record.speed` (converted) |
-| `fitTemperatures` | `[Double]?` | `record.temperature` |
-| `fitAltitudes` | `[Double]?` | `record.altitude` (converted) |
-| `fitTimestamps` | `[Date]?` | `record.timestamp` |
+| `fitHeartRates` | `[Int?]?` | `record.heart_rate` |
+| `fitCadences` | `[Int?]?` | `record.cadence` |
+| `fitPowers` | `[Int?]?` | `record.power` |
+| `fitSpeeds` | `[Double?]?` | `record.speed` (converted) |
+| `fitTemperatures` | `[Double?]?` | `record.temperature` |
+| `fitAltitudes` | `[Double?]?` | `record.altitude` (converted) |
+| `fitTimestamps` | `[Date?]?` | `record.timestamp` |
 
 ### Single-value property reference
 
@@ -185,9 +208,22 @@ print(fc.fitSport)  // e.g. "Cycling"
 
 | Property | Type | Source |
 |---|---|---|
+| `fitRecords` | `[Feature]` | features filtered by `fitType == .record` |
 | `fitActivity` | `[String: Sendable]?` | activity message |
 | `fitDevice` | `[String: Sendable]?` | file_id + device_info |
 | `fitSport` | `String?` | session sport type |
+
+**Methods on `FeatureCollection`:**
+
+| Method | Returns | Description |
+|---|---|---|
+| `fitTrackFromPointFeatures()` | `Feature?` | Reconstructs a `Feature<MultiLineString>` from Point features produced by `fitPointFeatures()`. Sensor data is re-accumulated into per-point arrays. Returns `nil` if no Point features exist. |
+
+**Convenience initializer on `Feature`:**
+
+| Initializer | Description |
+|---|---|
+| `Feature(fitTrackFrom:)` | Creates a track Feature from a `FeatureCollection` of Point features. Same as `fitTrackFromPointFeatures()`. |
 
 ### Limitations
 

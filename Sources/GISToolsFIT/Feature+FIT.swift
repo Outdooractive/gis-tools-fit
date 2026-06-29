@@ -144,39 +144,39 @@ extension Feature {
     // MARK: - Per-point sensor arrays
 
     /// Heart rate per track point (parallel to `MultiLineString` coordinates).
-    public var fitHeartRates: [Int]? {
-        properties["fit_heart_rates"] as? [Int]
+    public var fitHeartRates: [Int?]? {
+        properties["fit_heart_rates"] as? [Int?]
     }
 
     /// Cadence per track point.
-    public var fitCadences: [Int]? {
-        properties["fit_cadences"] as? [Int]
+    public var fitCadences: [Int?]? {
+        properties["fit_cadences"] as? [Int?]
     }
 
     /// Power per track point (watts).
-    public var fitPowers: [Int]? {
-        properties["fit_powers"] as? [Int]
+    public var fitPowers: [Int?]? {
+        properties["fit_powers"] as? [Int?]
     }
 
     /// Speed per track point (m/s).
-    public var fitSpeeds: [Double]? {
-        properties["fit_speeds"] as? [Double]
+    public var fitSpeeds: [Double?]? {
+        properties["fit_speeds"] as? [Double?]
     }
 
     /// Temperature per track point (degrees Celsius).
-    public var fitTemperatures: [Double]? {
-        properties["fit_temperatures"] as? [Double]
+    public var fitTemperatures: [Double?]? {
+        properties["fit_temperatures"] as? [Double?]
     }
 
     /// Altitude per track point (meters).
-    public var fitAltitudes: [Double]? {
-        properties["fit_altitudes"] as? [Double]
+    public var fitAltitudes: [Double?]? {
+        properties["fit_altitudes"] as? [Double?]
     }
 
-    /// Raw FIT timestamps per track point (seconds since FIT epoch).
-    public var fitTimestamps: [Date]? {
-        guard let raw = properties["fit_timestamps"] as? [UInt32] else { return nil }
-        return raw.map { FITDateFromTimestamp($0) }
+    /// Raw FIT timestamps per track point (Date). Maps nil timestamps to nil.
+    public var fitTimestamps: [Date?]? {
+        guard let raw = properties["fit_timestamps"] as? [UInt32?] else { return nil }
+        return raw.map { $0.map { FITDateFromTimestamp($0) } }
     }
 
     // MARK: - Point feature conversion
@@ -194,37 +194,34 @@ extension Feature {
         let spd = fitSpeeds ?? []
         let tmp = fitTemperatures ?? []
         let alt = fitAltitudes ?? []
-        let ts = properties["fit_timestamps"] as? [UInt32] ?? []
+        let ts = properties["fit_timestamps"] as? [UInt32?] ?? []
 
         var features: [Feature] = []
         for i in 0..<coords.count {
             var f = Feature(Point(coords[i]))
             f.properties["fit_type"] = "record"
-            if i < hr.count { f.properties["heart_rate"] = hr[i] }
-            if i < cad.count { f.properties["cadence"] = cad[i] }
-            if i < pw.count { f.properties["power"] = pw[i] }
-            if i < spd.count { f.properties["speed"] = spd[i] }
-            if i < tmp.count { f.properties["temperature"] = tmp[i] }
-            if i < alt.count { f.properties["altitude"] = alt[i] }
-            if i < ts.count { f.properties["timestamp"] = ts[i] }
+            if i < hr.count, let v = hr[i] { f.properties["heart_rate"] = v }
+            if i < cad.count, let v = cad[i] { f.properties["cadence"] = v }
+            if i < pw.count, let v = pw[i] { f.properties["power"] = v }
+            if i < spd.count, let v = spd[i] { f.properties["speed"] = v }
+            if i < tmp.count, let v = tmp[i] { f.properties["temperature"] = v }
+            if i < alt.count, let v = alt[i] { f.properties["altitude"] = v }
+            if i < ts.count, let v = ts[i] { f.properties["timestamp"] = v }
             features.append(f)
         }
         return FeatureCollection(features)
     }
 
     /// Point features within a time window.
-    ///
-    /// - Parameter from: Start date (inclusive).
-    /// - Parameter to: End date (inclusive).
-    /// - Returns: A ``FeatureCollection`` of point features in the time range.
     public func fitPointFeatures(from startDate: Date, to endDate: Date) -> FeatureCollection {
-        guard let ts = properties["fit_timestamps"] as? [UInt32] else {
+        guard let ts = properties["fit_timestamps"] as? [UInt32?] else {
             return fitPointFeatures()
         }
         let startSec = UInt32(startDate.timeIntervalSince(FITEpoch))
         let endSec = UInt32(endDate.timeIntervalSince(FITEpoch))
         let indices = ts.indices.filter { i in
-            ts[i] >= startSec && ts[i] <= endSec
+            guard let t = ts[i] else { return false }
+            return t >= startSec && t <= endSec
         }
         return sliceFeatures(at: indices)
     }
@@ -254,6 +251,15 @@ extension Feature {
         guard !coords.isEmpty else { return FeatureCollection() }
         let totalDistance = cumulativeDistances.last ?? 0
         return fitPointFeatures(from: clampStart * totalDistance, to: clampEnd * totalDistance)
+    }
+
+    /// Creates a track ``Feature`` from a collection of Point features
+    /// produced by ``fitPointFeatures()``.
+    ///
+    /// See ``FeatureCollection/fitTrackFromPointFeatures()``.
+    public init?(fitTrackFrom pointFeatures: FeatureCollection) {
+        guard let track = pointFeatures.fitTrackFromPointFeatures() else { return nil }
+        self = track
     }
 
     // MARK: - Private helpers
@@ -322,6 +328,59 @@ extension Feature {
 // MARK: - FeatureCollection FIT convenience properties
 
 extension FeatureCollection {
+
+    /// Features that originated from FIT record messages (track points).
+    public var fitRecords: [Feature] {
+        features.filter { $0.fitType == .record }
+    }
+
+    /// Reconstructs a track ``Feature`` from Point features produced by
+    /// ``Feature/fitPointFeatures()``.
+    ///
+    /// Non-Point features are silently skipped. Sensor data is re-accumulated
+    /// into per-point arrays on the returned track Feature.
+    ///
+    /// - Returns: A `Feature<MultiLineString>` with per-point sensor
+    ///            arrays, or `nil` if no Point features were found.
+    public func fitTrackFromPointFeatures() -> Feature? {
+        let pointFeatures = features.filter { $0.geometry is Point }
+        guard !pointFeatures.isEmpty else { return nil }
+
+        let coords = pointFeatures.map { ($0.geometry as! Point).coordinate }
+        let multiLine = MultiLineString(unchecked: [LineString(unchecked: coords)])
+
+        var feature = Feature(multiLine)
+        feature.properties["fit_type"] = FITRecordType.record.rawValue
+
+        var heartRates: [Int?] = []
+        var cadences: [Int?] = []
+        var powers: [Int?] = []
+        var speeds: [Double?] = []
+        var temperatures: [Double?] = []
+        var altitudes: [Double?] = []
+        var timestamps: [UInt32?] = []
+
+        for pf in pointFeatures {
+            let p = pf.properties
+            heartRates.append(p["heart_rate"] as? Int)
+            cadences.append(p["cadence"] as? Int)
+            powers.append(p["power"] as? Int)
+            speeds.append(p["speed"] as? Double)
+            temperatures.append(p["temperature"] as? Double)
+            altitudes.append(p["altitude"] as? Double)
+            timestamps.append(p["timestamp"] as? UInt32)
+        }
+
+        if heartRates.contains(where: { $0 != nil }) { feature.properties["fit_heart_rates"] = heartRates }
+        if cadences.contains(where: { $0 != nil }) { feature.properties["fit_cadences"] = cadences }
+        if powers.contains(where: { $0 != nil }) { feature.properties["fit_powers"] = powers }
+        if speeds.contains(where: { $0 != nil }) { feature.properties["fit_speeds"] = speeds }
+        if temperatures.contains(where: { $0 != nil }) { feature.properties["fit_temperatures"] = temperatures }
+        if altitudes.contains(where: { $0 != nil }) { feature.properties["fit_altitudes"] = altitudes }
+        if timestamps.contains(where: { $0 != nil }) { feature.properties["fit_timestamps"] = timestamps }
+
+        return feature
+    }
 
     /// Activity metadata from the FIT file.
     public var fitActivity: [String: Sendable]? {

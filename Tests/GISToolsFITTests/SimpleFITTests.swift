@@ -75,13 +75,22 @@ struct SimpleFITTests {
         guard let track = fc.features.first else { return }
         
         guard let hr = track.fitHeartRates else { return }
-        #expect(hr == [120, 145, 160])
+        #expect(hr.count == 3)
+        #expect(hr[0] == 120)
+        #expect(hr[1] == 145)
+        #expect(hr[2] == 160)
         
         guard let cad = track.fitCadences else { return }
-        #expect(cad == [80, 90, 95])
+        #expect(cad.count == 3)
+        #expect(cad[0] == 80)
+        #expect(cad[1] == 90)
+        #expect(cad[2] == 95)
         
         guard let pw = track.fitPowers else { return }
-        #expect(pw == [150, 220, 280])
+        #expect(pw.count == 3)
+        #expect(pw[0] == 150)
+        #expect(pw[1] == 220)
+        #expect(pw[2] == 280)
         
         guard let ts = track.fitTimestamps else { return }
         #expect(ts.count == 3)
@@ -141,6 +150,47 @@ struct SimpleFITTests {
         // Empty window should return no features
         let empty = track.fitPointFeatures(from: epoch.addingTimeInterval(100000), to: epoch.addingTimeInterval(200000))
         #expect(empty.features.isEmpty)
+    }
+
+    // MARK: - FeatureCollection filtering and track reconstruction
+
+    @Test
+    func fitRecordsFilter() async throws {
+        guard let data = makeMinimalFIT() else { return }
+        let fc = try FITCoder.read(from: data)
+        #expect(fc.fitRecords.count == 1)
+    }
+
+    @Test
+    func fitTrackFromPointFeatures() async throws {
+        guard let data = makeMinimalFIT() else { return }
+        let fc = try FITCoder.read(from: data)
+        guard let track = fc.features.first else { return }
+
+        let pts = track.fitPointFeatures()
+        guard let rebuilt = pts.fitTrackFromPointFeatures() else { return }
+
+        #expect(rebuilt.fitHeartRates?[0] == 120)
+        #expect(rebuilt.fitCadences?[1] == 90)
+        #expect(rebuilt.fitPowers?[2] == 280)
+    }
+
+    @Test
+    func fitTrackFromPointFeaturesEmpty() async throws {
+        let fc = FeatureCollection()
+        #expect(fc.fitTrackFromPointFeatures() == nil)
+    }
+
+    @Test
+    func fitTrackFromPointFeaturesConvenienceInit() async throws {
+        guard let data = makeMinimalFIT() else { return }
+        let fc = try FITCoder.read(from: data)
+        guard let track = fc.features.first else { return }
+
+        let pts = track.fitPointFeatures()
+        let rebuilt = Feature(fitTrackFrom: pts)
+        #expect(rebuilt?.fitHeartRates?[0] == 120)
+        #expect(rebuilt?.fitPowers?[2] == 280)
     }
 
     // MARK: - Test FIT factory
