@@ -289,7 +289,7 @@ struct SimpleFITTests {
             crc ^= UInt16(byte)
             for _ in 0..<8 {
                 if (crc & 0x0001) != 0 {
-                    crc = (crc >> 1) ^ 0x8408
+                    crc = (crc >> 1) ^ 0xA001
                 }
                 else {
                     crc >>= 1

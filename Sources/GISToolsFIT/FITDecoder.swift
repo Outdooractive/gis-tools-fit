@@ -24,6 +24,7 @@ enum FITDecoder {
         var globalMessageNumber: UInt16
         var architecture: UInt8  // 0 = little-endian, 1 = big-endian
         var fieldDefs: [FieldDef]
+        var devFieldDefs: [FieldDef]  // developer field definitions
     }
 
     struct FieldDef {
@@ -174,12 +175,14 @@ enum FITDecoder {
             }
 
             // Skip developer fields if present
+            var devFieldDefs: [FieldDef] = []
             if hasDevData {
                 let numDevFields = Int(try readByte())
                 for _ in 0..<numDevFields {
-                    let _ = try readByte()  // field num
-                    let _ = try readByte()  // size
+                    let fn = try readByte()
+                    let fs = try readByte()
                     let _ = try readByte()  // dev data index
+                    devFieldDefs.append(FieldDef(num: fn, size: fs, baseType: 0))
                 }
             }
 
@@ -187,7 +190,8 @@ enum FITDecoder {
                 localMessageNum: localNum,
                 globalMessageNumber: globalNum,
                 architecture: isLE ? 0 : 1,
-                fieldDefs: fieldDefs)
+                fieldDefs: fieldDefs,
+                devFieldDefs: devFieldDefs)
         }
 
         // MARK: - Data messages
@@ -209,29 +213,24 @@ enum FITDecoder {
                 rawMsg.fields[Int(fd.num)] = value
             }
 
+            // Read and skip developer field data
+            for fd in def.devFieldDefs {
+                let _ = try readBytes(Int(fd.size))
+            }
+
             messages.append(rawMsg)
         }
 
         // MARK: - Compressed timestamp messages
 
         mutating func decodeCompressedTimestampMessage(_ messages: inout [RawMessage]) throws {
-            // For now, skip compressed timestamp messages.
-            // The header byte tells us the local message type:
-            // bits 7-6 = 11, bits 5 = local_mesg_num[2], bits 4-0 = time_offset[4:0]
+            // Compressed timestamp header:
+            // bits 7-6 = 11 (compressed timestamp marker)
+            // bit 5 = local_mesg_num (only 1 bit, so 0 or 1)
+            // bits 4-0 = time_offset
             let header = try readByte()
-            let localNumBits = (header >> 5) & 0x01  // bit 5 -> bit 0
+            let localNum = Int((header >> 5) & 0x01)
             let _ = (header & 0x1F)  // time offset 5 bits
-
-            // For two-byte compressed headers:
-            // If localNumBits > 0, read next byte for extended local message number
-            let localNum: Int
-            if localNumBits != 0 {
-                let ext = try readByte()
-                localNum = Int(ext & 0x0F) | (Int(localNumBits) << 4)
-            }
-            else {
-                localNum = 0
-            }
 
             guard let def = definitions[localNum] else {
                 throw DecoderError.unknownDefinition(localNum: localNum)
@@ -246,6 +245,11 @@ enum FITDecoder {
                 rawMsg.fields[Int(fd.num)] = value
             }
 
+            // Read and skip developer field data
+            for fd in def.devFieldDefs {
+                let _ = try readBytes(Int(fd.size))
+            }
+
             messages.append(rawMsg)
         }
 
@@ -255,7 +259,7 @@ enum FITDecoder {
             guard dataEnd + 2 <= data.count else { throw DecoderError.truncated }
             fileCrc = try readUInt16(le: true)
 
-            // Calculate CRC over header + data (everything before CRC bytes)
+            // The file CRC is computed over the header + data (everything before the CRC bytes)
             var crcData = Data(capacity: dataEnd)
             for i in 0..<dataEnd {
                 crcData.append(data[i])
@@ -391,7 +395,7 @@ enum FITDecoder {
         }
     }
 
-    // MARK: - CRC16-CCITT
+    // MARK: - CRC16 (CRC-16/ARC: poly=0x8005, reflected, init=0)
 
     private static func crcCalculator(data: Data) -> UInt16 {
         var crc: UInt16 = 0
@@ -399,7 +403,7 @@ enum FITDecoder {
             crc ^= UInt16(data[i])
             for _ in 0..<8 {
                 if (crc & 0x0001) != 0 {
-                    crc = (crc >> 1) ^ 0x8408
+                    crc = (crc >> 1) ^ 0xA001
                 }
                 else {
                     crc >>= 1
