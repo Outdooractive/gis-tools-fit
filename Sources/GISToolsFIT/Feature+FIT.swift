@@ -176,7 +176,7 @@ extension Feature {
     /// Raw FIT timestamps per track point (Date). Maps nil timestamps to nil.
     public var fitTimestamps: [Date?]? {
         guard let raw = properties["fit_timestamps"] as? [UInt32?] else { return nil }
-        return raw.map { $0.map { FITDateFromTimestamp($0) } }
+        return raw.map { $0.map { FIT.dateFromTimestamp($0) } }
     }
 
     // MARK: - Point feature conversion
@@ -217,8 +217,8 @@ extension Feature {
         guard let ts = properties["fit_timestamps"] as? [UInt32?] else {
             return fitPointFeatures()
         }
-        let startSec = UInt32(startDate.timeIntervalSince(FITEpoch))
-        let endSec = UInt32(endDate.timeIntervalSince(FITEpoch))
+        let startSec = UInt32(startDate.timeIntervalSince(FIT.epoch))
+        let endSec = UInt32(endDate.timeIntervalSince(FIT.epoch))
         let indices = ts.indices.filter { i in
             guard let t = ts[i] else { return false }
             return t >= startSec && t <= endSec
@@ -321,84 +321,6 @@ extension Feature {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.date(from: s)
-    }
-
-}
-
-// MARK: - FeatureCollection FIT convenience properties
-
-extension FeatureCollection {
-
-    /// Features that originated from FIT record messages (track points).
-    public var fitRecords: [Feature] {
-        features.filter { $0.fitType == .record }
-    }
-
-    /// Reconstructs a track ``Feature`` from Point features produced by
-    /// ``Feature/fitPointFeatures()``.
-    ///
-    /// Non-Point features are silently skipped. Sensor data is re-accumulated
-    /// into per-point arrays on the returned track Feature.
-    ///
-    /// - Returns: A `Feature<MultiLineString>` with per-point sensor
-    ///            arrays, or `nil` if no Point features were found.
-    public func fitTrackFromPointFeatures() -> Feature? {
-        let pointFeatures = features.filter { $0.geometry is Point }
-        guard !pointFeatures.isEmpty else { return nil }
-
-        let coords = pointFeatures.map { ($0.geometry as! Point).coordinate }
-        let multiLine = MultiLineString(unchecked: [LineString(unchecked: coords)])
-
-        var feature = Feature(multiLine)
-        feature.properties["fit_type"] = FITRecordType.record.rawValue
-
-        var heartRates: [Int?] = []
-        var cadences: [Int?] = []
-        var powers: [Int?] = []
-        var speeds: [Double?] = []
-        var temperatures: [Double?] = []
-        var altitudes: [Double?] = []
-        var timestamps: [UInt32?] = []
-
-        for pf in pointFeatures {
-            let p = pf.properties
-            heartRates.append(p["heart_rate"] as? Int)
-            cadences.append(p["cadence"] as? Int)
-            powers.append(p["power"] as? Int)
-            speeds.append(p["speed"] as? Double)
-            temperatures.append(p["temperature"] as? Double)
-            altitudes.append(p["altitude"] as? Double)
-            timestamps.append(p["timestamp"] as? UInt32)
-        }
-
-        if heartRates.contains(where: { $0 != nil }) { feature.properties["fit_heart_rates"] = heartRates }
-        if cadences.contains(where: { $0 != nil }) { feature.properties["fit_cadences"] = cadences }
-        if powers.contains(where: { $0 != nil }) { feature.properties["fit_powers"] = powers }
-        if speeds.contains(where: { $0 != nil }) { feature.properties["fit_speeds"] = speeds }
-        if temperatures.contains(where: { $0 != nil }) { feature.properties["fit_temperatures"] = temperatures }
-        if altitudes.contains(where: { $0 != nil }) { feature.properties["fit_altitudes"] = altitudes }
-        if timestamps.contains(where: { $0 != nil }) { feature.properties["fit_timestamps"] = timestamps }
-
-        return feature
-    }
-
-    /// Activity metadata from the FIT file.
-    public var fitActivity: [String: Sendable]? {
-        get { foreignMembers["fit_activity"] as? [String: Sendable] }
-        set { foreignMembers["fit_activity"] = newValue }
-    }
-
-    /// Device information from the FIT file.
-    public var fitDevice: [String: Sendable]? {
-        get { foreignMembers["fit_device"] as? [String: Sendable] }
-        set { foreignMembers["fit_device"] = newValue }
-    }
-
-    /// The sport type of the activity (from session data).
-    public var fitSport: String? {
-        let act = foreignMembers["fit_activity"] as? [String: Sendable]
-        return act?["sport"] as? String ??
-               act?["sub_sport"] as? String
     }
 
 }
