@@ -31,7 +31,7 @@ struct SimpleFITTests {
     @Test
     func semicircleConversion() async throws {
         // 1073741824 semicircles = exactly 90 degrees (half of 2^31)
-        let degrees = FITDegreesFromSemicircles(1073741824)
+        let degrees = FIT.degreesFromSemicircles(1073741824)
         #expect(abs(degrees - 90.0) < 0.01)
     }
 
@@ -143,7 +143,7 @@ struct SimpleFITTests {
         #expect(all.features.count == 3)
 
         // Use a wide time window that should include all points
-        let epoch = FITDateFromTimestamp(500000)
+        let epoch = FIT.dateFromTimestamp(500000)
         let wide = track.fitPointFeatures(from: epoch, to: epoch.addingTimeInterval(100000))
         #expect(wide.features.count == 3)
 

@@ -6,12 +6,12 @@
 
 # GISToolsFIT
 
-FIT (Flexible and Interoperable Data Transfer) file read support for Swift, built on top of [**gis-tools**](https://github.com/Outdooractive/gis-tools). Parses Garmin FIT activity files into typed `FeatureCollection` objects, pure Swift implementation based on the public FIT protocol specification.
+FIT (Flexible and Interoperable Data Transfer) file read **and write** support for Swift, built on top of [**gis-tools**](https://github.com/Outdooractive/gis-tools). Parses Garmin FIT activity files into typed `FeatureCollection` objects and writes them back to binary FIT, pure Swift implementation based on the public FIT protocol specification.
 
 ## Features
 
-- Pure Swift FIT decoder — no external dependencies
-- Reads FIT 2.0 files with CRC validation
+- Pure Swift FIT decoder and encoder — no external dependencies
+- Reads and writes FIT 2.0 files with CRC validation
 - Record points → `Feature<MultiLineString>` with per-point sensor data as parallel arrays
 - Lap boundaries split the track into `MultiLineString` segments
 - Session, Lap, Event, File-ID, and Activity messages → `Feature` properties + `FeatureCollection` metadata
@@ -53,6 +53,26 @@ let fc = try FITCoder.read(from: url)
 // Or via the convenience init:
 guard let fc = FeatureCollection(fit: url) else { return }
 ```
+
+### Writing
+
+```swift
+// Encode a FeatureCollection back to binary FIT data
+let data = try FITCoder.write(from: fc)
+
+// Or write directly to a file
+try FITCoder.write(from: fc, to: url)
+
+// Or via the FeatureCollection convenience method
+try fc.writeFIT(to: url)
+```
+
+The `FeatureCollection` must contain a track `Feature` with a `MultiLineString`
+geometry and `fit_type == "record"`, as produced by `FITCoder.read(from:)`.
+Per-point sensor arrays, session, lap, and activity metadata are written back
+into the corresponding FIT messages. Round-trip read → write → read preserves
+coordinates, heart rate, cadence, power, speed, temperature, altitude, and
+timestamps.
 
 ### Track geometry
 
@@ -227,7 +247,6 @@ print(track.fitTotalCalories)       // Int? — kcal
 
 ### Limitations
 
-- **Read-only**: FIT writing is not yet supported
 - **Compressed timestamps**: basic support; time-offset accumulation is minimal
 - **Developer fields**: parsed but not exposed via typed API
 - **Large files**: all messages are decoded in memory at once; files with 500K+ records may use significant memory

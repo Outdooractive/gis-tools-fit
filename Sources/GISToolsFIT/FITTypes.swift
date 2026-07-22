@@ -93,24 +93,36 @@ public enum FITSportType: UInt8, Equatable, Sendable {
 
 // MARK: - Semicircle conversion
 
-/// Converts a FIT semicircle value to decimal degrees.
-/// - Parameter semicircles: The raw semicircle value (sint32).
-/// - Returns: Degrees in WGS84.
-func FITDegreesFromSemicircles(_ semicircles: Int32) -> Double {
-    Double(semicircles) * (180.0 / 2147483648.0)
-}
+/// FIT math and conversion helpers.
+public enum FIT {
 
-/// The FIT epoch: 1989-12-31T00:00:00Z.
-/// FIT timestamps are seconds since this date.
-let FITEpoch: Date = {
-    var components = DateComponents()
-    components.year = 1989
-    components.month = 12
-    components.day = 31
-    return Calendar(identifier: .gregorian).date(from: components)!
-}()
+    /// The FIT epoch: 1989-12-31T00:00:00Z.
+    /// FIT timestamps are seconds since this date.
+    public static let epoch: Date = {
+        var components = DateComponents()
+        components.year = 1989
+        components.month = 12
+        components.day = 31
+        return Calendar(identifier: .gregorian).date(from: components)!
+    }()
 
-/// Converts a FIT timestamp (seconds since FIT epoch) to a Date.
-func FITDateFromTimestamp(_ timestamp: UInt32) -> Date {
-    FITEpoch.addingTimeInterval(TimeInterval(timestamp))
+    /// Converts a FIT timestamp (seconds since FIT epoch) to a Date.
+    public static func dateFromTimestamp(_ timestamp: UInt32) -> Date {
+        epoch.addingTimeInterval(TimeInterval(timestamp))
+    }
+
+    /// Converts a FIT semicircle value to decimal degrees.
+    /// - Parameter semicircles: The raw semicircle value (sint32).
+    /// - Returns: Degrees in WGS84.
+    public static func degreesFromSemicircles(_ semicircles: Int32) -> Double {
+        Double(semicircles) * (180.0 / 2147483648.0)
+    }
+
+    /// Converts decimal degrees to a FIT semicircle value.
+    /// - Parameter degrees: The latitude or longitude in WGS84.
+    /// - Returns: The raw semicircle value (sint32).
+    public static func semicirclesFromDegrees(_ degrees: Double) -> Int32 {
+        Int32(degrees * (2147483648.0 / 180.0))
+    }
+
 }
