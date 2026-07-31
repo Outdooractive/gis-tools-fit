@@ -122,7 +122,9 @@ public enum FIT {
     /// - Parameter degrees: The latitude or longitude in WGS84.
     /// - Returns: The raw semicircle value (sint32).
     public static func semicirclesFromDegrees(_ degrees: Double) -> Int32 {
-        Int32(degrees * (2147483648.0 / 180.0))
+        let scaled = degrees * (2147483648.0 / 180.0)
+        let clamped = max(Double(Int32.min), min(Double(Int32.max), scaled))
+        return Int32(clamped)
     }
 
 }

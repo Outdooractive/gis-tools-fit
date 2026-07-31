@@ -12,7 +12,7 @@ struct SimpleFITTests {
             #expect(Bool(false), "Should have thrown")
         }
         catch {
-            #expect(true)  // Expected to throw
+            #expect(Bool(true))
         }
     }
 
@@ -24,7 +24,7 @@ struct SimpleFITTests {
             #expect(Bool(false), "Should have thrown")
         }
         catch {
-            #expect(true)
+            #expect(Bool(true))
         }
     }
 

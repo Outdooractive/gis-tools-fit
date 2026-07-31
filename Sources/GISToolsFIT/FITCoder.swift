@@ -113,6 +113,10 @@ public enum FITCoder {
                 guard let lat = msg.fields[0] as? Int32,
                       let lon = msg.fields[1] as? Int32
                 else { break }
+
+                // FIT sentinel for invalid (no GPS fix): 0x7FFFFFFF
+                guard lat != Int32.max, lon != Int32.max else { break }
+
                 recordPoints.append((lat, lon, msg.fields))
 
                 // Extract per-point sensor data — always append per record
