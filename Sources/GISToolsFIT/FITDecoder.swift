@@ -312,9 +312,14 @@ enum FITDecoder {
             case 2:  // uint8
                 return bytes.first ?? 0
             case 3:  // sint16
-                let val = le
-                    ? Int16(bytes[safe: 0] ?? 0) | (Int16(bytes[safe: 1] ?? 0) << 8)
-                    : Int16(bytes[safe: 1] ?? 0) | (Int16(bytes[safe: 0] ?? 0) << 8)
+                let raw: UInt16
+                if le {
+                    raw = UInt16(bytes[safe: 0] ?? 0) | (UInt16(bytes[safe: 1] ?? 0) << 8)
+                }
+                else {
+                    raw = UInt16(bytes[safe: 1] ?? 0) | (UInt16(bytes[safe: 0] ?? 0) << 8)
+                }
+                let val = Int16(bitPattern: raw)
                 if val == Int16(0x7FFF) { return val }
                 return val
             case 4:  // uint16
@@ -323,16 +328,16 @@ enum FITDecoder {
                     : UInt16(bytes[safe: 1] ?? 0) | (UInt16(bytes[safe: 0] ?? 0) << 8)
                 return val
             case 5:  // sint32
-                let val: Int32
+                let raw: UInt32
                 if le {
-                    val = Int32(bytes[safe: 0] ?? 0) | (Int32(bytes[safe: 1] ?? 0) << 8)
-                        | (Int32(bytes[safe: 2] ?? 0) << 16) | (Int32(bytes[safe: 3] ?? 0) << 24)
+                    raw = UInt32(bytes[safe: 0] ?? 0) | (UInt32(bytes[safe: 1] ?? 0) << 8)
+                        | (UInt32(bytes[safe: 2] ?? 0) << 16) | (UInt32(bytes[safe: 3] ?? 0) << 24)
                 }
                 else {
-                    val = Int32(bytes[safe: 3] ?? 0) | (Int32(bytes[safe: 2] ?? 0) << 8)
-                        | (Int32(bytes[safe: 1] ?? 0) << 16) | (Int32(bytes[safe: 0] ?? 0) << 24)
+                    raw = UInt32(bytes[safe: 3] ?? 0) | (UInt32(bytes[safe: 2] ?? 0) << 8)
+                        | (UInt32(bytes[safe: 1] ?? 0) << 16) | (UInt32(bytes[safe: 0] ?? 0) << 24)
                 }
-                return val
+                return Int32(bitPattern: raw)
             case 6:  // uint32
                 let val: UInt32
                 if le {

@@ -81,17 +81,31 @@ enum FITEncoder {
         /// Maps global message number -> assigned local message number.
         var localNumByGlobal: [UInt16: UInt8] = [:]
 
+        /// Maps global message number -> field signature of last written definition.
+        var definitionSignature: [UInt16: String] = [:]
+
         /// The next local message number to assign.
         var nextLocalNum: UInt8 = 0
 
         mutating func addMessage(_ message: EncodedMessage) {
+            let fieldSignature = message.fields.map { "\($0.num):\($0.data.count):\($0.baseType.rawValue)" }.joined(separator: ",")
+
             let localNum: UInt8
             if let existing = localNumByGlobal[message.globalMessageNumber] {
-                localNum = existing
+                if fieldSignature == definitionSignature[message.globalMessageNumber] {
+                    localNum = existing
+                }
+                else {
+                    // Field layout changed — write a new definition (old local num is reused)
+                    localNum = existing
+                    writeDefinition(for: message, localNum: localNum)
+                    definitionSignature[message.globalMessageNumber] = fieldSignature
+                }
             }
             else {
                 localNum = nextLocalNum
                 localNumByGlobal[message.globalMessageNumber] = localNum
+                definitionSignature[message.globalMessageNumber] = fieldSignature
                 nextLocalNum += 1
                 writeDefinition(for: message, localNum: localNum)
             }
