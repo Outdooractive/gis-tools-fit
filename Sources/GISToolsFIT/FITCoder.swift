@@ -151,7 +151,7 @@ public enum FITCoder {
         // Build track Feature with MultiLineString
         var features: [Feature] = []
         if !recordPoints.isEmpty {
-            let segments: [[Coordinate3D]] = buildSegments(recordPoints, lapStarts: lapStarts)
+            let segments: [[Coordinate3D]] = buildSegments(recordPoints, altitudes: altitudes, lapStarts: lapStarts)
             let lineStrings = segments.map { LineString(unchecked: $0) }
             let multiLine = MultiLineString(unchecked: lineStrings)
             var feature = Feature(multiLine)
@@ -166,7 +166,6 @@ public enum FITCoder {
             if powers.contains(where: { $0 != nil }) { feature.properties["fit_powers"] = powers }
             if speeds.contains(where: { $0 != nil }) { feature.properties["fit_speeds"] = speeds }
             if temperatures.contains(where: { $0 != nil }) { feature.properties["fit_temperatures"] = temperatures }
-            if altitudes.contains(where: { $0 != nil }) { feature.properties["fit_altitudes"] = altitudes }
             if timestamps.contains(where: { $0 != nil }) { feature.properties["fit_timestamps"] = timestamps }
 
             features.append(feature)
@@ -187,6 +186,7 @@ public enum FITCoder {
 
     private static func buildSegments(
         _ points: [(lat: Int32, lon: Int32, fields: [Int: Any])],
+        altitudes: [Double?],
         lapStarts: [Int]
     ) -> [[Coordinate3D]] {
         // If there are lap markers, split points at lap boundaries
@@ -202,10 +202,12 @@ public enum FITCoder {
             let end = sorted[i + 1]
             guard end > start else { continue }
 
-            let coords: [Coordinate3D] = points[start..<end].map { p in
-                Coordinate3D(
+            let coords: [Coordinate3D] = points[start..<end].enumerated().map { (i, p) in
+                let alt = start + i < altitudes.count ? altitudes[start + i] : nil
+                return Coordinate3D(
                     x: FIT.degreesFromSemicircles(p.lon),
                     y: FIT.degreesFromSemicircles(p.lat),
+                    z: alt,
                     projection: .epsg4326)
             }
             if !coords.isEmpty {
@@ -280,9 +282,7 @@ public enum FITCoder {
         let powers = track.fitPowers ?? Array(repeating: nil, count: allCoords.count)
         let speeds = track.fitSpeeds ?? Array(repeating: nil, count: allCoords.count)
         let temperatures = track.fitTemperatures ?? Array(repeating: nil, count: allCoords.count)
-        let altitudes = track.fitAltitudes ?? Array(repeating: nil, count: allCoords.count)
-        let rawTimestamps = track.properties["fit_timestamps"] as? [UInt32?]
-            ?? Array(repeating: nil, count: allCoords.count)
+        let rawTimestamps = track.properties["fit_timestamps"] as? [UInt32?] ?? Array(repeating: nil, count: allCoords.count)
 
         // Lap boundaries: one lap per LineString segment
         var lapStarts: [Int] = []
@@ -301,7 +301,6 @@ public enum FITCoder {
                 power: i < powers.count ? powers[i] : nil,
                 speed: i < speeds.count ? speeds[i] : nil,
                 temperature: i < temperatures.count ? temperatures[i] : nil,
-                altitude: i < altitudes.count ? altitudes[i] : nil,
                 timestamp: i < rawTimestamps.count ? rawTimestamps[i] : nil))
         }
 
@@ -357,7 +356,6 @@ public enum FITCoder {
         power: Int?,
         speed: Double?,
         temperature: Double?,
-        altitude: Double?,
         timestamp: UInt32?
     ) -> FITEncoder.EncodedMessage {
         let lat = FIT.semicirclesFromDegrees(coordinate.latitude)
@@ -369,7 +367,7 @@ public enum FITCoder {
         ]
 
         // Altitude: convert back to raw uint16 (scaled by 5, offset 500)
-        if let altitude {
+        if let altitude = coordinate.altitude {
             let raw = UInt32((altitude + 500.0) * 5.0)
             fields.append(.init(
                 num: 2,

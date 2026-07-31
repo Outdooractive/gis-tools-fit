@@ -67,7 +67,6 @@ extension FeatureCollection {
         var powers: [Int?] = []
         var speeds: [Double?] = []
         var temperatures: [Double?] = []
-        var altitudes: [Double?] = []
         var timestamps: [UInt32?] = []
 
         for pf in pointFeatures {
@@ -77,7 +76,6 @@ extension FeatureCollection {
             powers.append(p["power"] as? Int)
             speeds.append(p["speed"] as? Double)
             temperatures.append(p["temperature"] as? Double)
-            altitudes.append(p["altitude"] as? Double)
             timestamps.append(p["timestamp"] as? UInt32)
         }
 
@@ -86,7 +84,6 @@ extension FeatureCollection {
         if powers.contains(where: { $0 != nil }) { feature.properties["fit_powers"] = powers }
         if speeds.contains(where: { $0 != nil }) { feature.properties["fit_speeds"] = speeds }
         if temperatures.contains(where: { $0 != nil }) { feature.properties["fit_temperatures"] = temperatures }
-        if altitudes.contains(where: { $0 != nil }) { feature.properties["fit_altitudes"] = altitudes }
         if timestamps.contains(where: { $0 != nil }) { feature.properties["fit_timestamps"] = timestamps }
 
         return feature
