@@ -193,6 +193,83 @@ struct SimpleFITTests {
         #expect(rebuilt?.fitPowers?[2] == 280)
     }
 
+    // MARK: - Altitude tests
+
+    @Test
+    func altitudeInCoordinateZ() async throws {
+        guard let data = makeFITWithAltitudes() else { return }
+        let fc = try FITCoder.read(from: data)
+        guard let track = fc.features.first,
+              let ml = track.geometry as? MultiLineString else { return }
+
+        let coords = ml.lineStrings.flatMap { $0.coordinates }
+        #expect(coords.count == 3)
+
+        #expect(coords[0].altitude == 100.0)
+        #expect(coords[1].altitude == 200.0)
+        #expect(coords[2].altitude == 300.0)
+    }
+
+    @Test
+    func altitudeRoundTrip() async throws {
+        guard let original = makeFITWithAltitudes() else { return }
+        let fc1 = try FITCoder.read(from: original)
+        let encoded = try FITCoder.write(from: fc1)
+        let fc2 = try FITCoder.read(from: encoded)
+
+        guard let track2 = fc2.features.first,
+              let ml2 = track2.geometry as? MultiLineString else { return }
+        let coords = ml2.lineStrings.flatMap { $0.coordinates }
+
+        #expect(coords[0].altitude == 100.0)
+        #expect(coords[1].altitude == 200.0)
+        #expect(coords[2].altitude == 300.0)
+    }
+
+    @Test
+    func pointFeaturesAltitudeInCoordinateNotProperty() async throws {
+        guard let data = makeFITWithAltitudes() else { return }
+        let fc = try FITCoder.read(from: data)
+        guard let track = fc.features.first else { return }
+
+        let pts = track.fitPointFeatures()
+        #expect(pts.features.count == 3)
+
+        let first = pts.features[0]
+        let second = pts.features[1]
+        let third = pts.features[2]
+
+        guard let p0 = first.geometry as? Point,
+              let p1 = second.geometry as? Point,
+              let p2 = third.geometry as? Point else { return }
+
+        #expect(p0.coordinate.altitude == 100.0)
+        #expect(p1.coordinate.altitude == 200.0)
+        #expect(p2.coordinate.altitude == 300.0)
+
+        #expect(first.properties["altitude"] as? Double == nil)
+        #expect(second.properties["altitude"] as? Double == nil)
+        #expect(third.properties["altitude"] as? Double == nil)
+    }
+
+    @Test
+    func trackFromPointFeaturesPreservesAltitudeInCoordinate() async throws {
+        guard let data = makeFITWithAltitudes() else { return }
+        let fc = try FITCoder.read(from: data)
+        guard let track = fc.features.first else { return }
+
+        let pts = track.fitPointFeatures()
+        guard let rebuilt = pts.fitTrackFromPointFeatures(),
+              let ml = rebuilt.geometry as? MultiLineString else { return }
+
+        let coords = ml.lineStrings.flatMap { $0.coordinates }
+        #expect(coords[0].altitude == 100.0)
+        #expect(coords[1].altitude == 200.0)
+        #expect(coords[2].altitude == 300.0)
+
+        #expect(rebuilt.properties["fit_altitudes"] == nil)
+    }
+
     // MARK: - Test FIT factory
 
     /// Creates a minimal valid FIT file.
@@ -312,6 +389,92 @@ struct SimpleFITTests {
         let u = UInt32(bitPattern: value)
         return [UInt8(u & 0xFF), UInt8((u >> 8) & 0xFF),
                 UInt8((u >> 16) & 0xFF), UInt8((u >> 24) & 0xFF)]
+    }
+
+    /// Creates a minimal FIT file with altitude data on records.
+    private func makeFITWithAltitudes() -> Data? {
+        var headerData = Data()
+        var mesgData = Data()
+
+        // --- Definition: file_id (local mesg 0, global mesg 0) ---
+        mesgData.append(0x40)
+        mesgData.append(0x00)
+        mesgData.append(0x00)
+        mesgData.append(contentsOf: le16(0))
+        mesgData.append(5)
+        mesgData.append(contentsOf: [0, 1, 0])
+        mesgData.append(contentsOf: [1, 2, 4])
+        mesgData.append(contentsOf: [2, 2, 4])
+        mesgData.append(contentsOf: [3, 4, 12])
+        mesgData.append(contentsOf: [253, 4, 6])
+
+        // --- Data: file_id ---
+        mesgData.append(0x00)
+        mesgData.append(4)
+        mesgData.append(contentsOf: le16(1))
+        mesgData.append(contentsOf: le16(0))
+        mesgData.append(contentsOf: le32(UInt32(0)))
+        mesgData.append(contentsOf: le32(UInt32(500000)))
+
+        // --- Definition: record (local mesg 1, global mesg 20) with altitude ---
+        mesgData.append(0x41)
+        mesgData.append(0x00)
+        mesgData.append(0x00)
+        mesgData.append(contentsOf: le16(20))
+        mesgData.append(7)
+        mesgData.append(contentsOf: [0, 4, 5])
+        mesgData.append(contentsOf: [1, 4, 5])
+        mesgData.append(contentsOf: [2, 2, 4])
+        mesgData.append(contentsOf: [3, 1, 2])
+        mesgData.append(contentsOf: [4, 1, 2])
+        mesgData.append(contentsOf: [7, 2, 4])
+        mesgData.append(contentsOf: [253, 4, 6])
+
+        // --- Data: record 1 (alt=100m, raw=(100+500)*5=3000) ---
+        mesgData.append(0x01)
+        mesgData.append(contentsOf: le32(semicircles(47.5)))
+        mesgData.append(contentsOf: le32(semicircles(11.5)))
+        mesgData.append(contentsOf: le16(3000))
+        mesgData.append(120)
+        mesgData.append(80)
+        mesgData.append(contentsOf: le16(150))
+        mesgData.append(contentsOf: le32(UInt32(500100)))
+
+        // --- Data: record 2 (alt=200m, raw=(200+500)*5=3500) ---
+        mesgData.append(0x01)
+        mesgData.append(contentsOf: le32(semicircles(48.0)))
+        mesgData.append(contentsOf: le32(semicircles(12.0)))
+        mesgData.append(contentsOf: le16(3500))
+        mesgData.append(145)
+        mesgData.append(90)
+        mesgData.append(contentsOf: le16(220))
+        mesgData.append(contentsOf: le32(UInt32(500200)))
+
+        // --- Data: record 3 (alt=300m, raw=(300+500)*5=4000) ---
+        mesgData.append(0x01)
+        mesgData.append(contentsOf: le32(semicircles(49.0)))
+        mesgData.append(contentsOf: le32(semicircles(13.0)))
+        mesgData.append(contentsOf: le16(4000))
+        mesgData.append(160)
+        mesgData.append(95)
+        mesgData.append(contentsOf: le16(280))
+        mesgData.append(contentsOf: le32(UInt32(500300)))
+
+        // --- Header ---
+        headerData.append(12)
+        headerData.append(0x20)
+        headerData.append(contentsOf: le16(2100))
+        headerData.append(contentsOf: le32(UInt32(mesgData.count)))
+        headerData.append(contentsOf: [0x2E, 0x46, 0x49, 0x54])
+
+        var fileData = Data()
+        fileData.append(headerData)
+        fileData.append(mesgData)
+
+        let crc = crc16(fileData)
+        fileData.append(contentsOf: le16(crc))
+
+        return fileData
     }
 
 }

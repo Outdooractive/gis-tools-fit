@@ -57,7 +57,10 @@ extension Feature {
 
     /// Altitude in meters.
     public var fitAltitude: Double? {
-        get { doubleProp("altitude") ?? doubleProp("enhanced_altitude") }
+        get {
+            if let point = geometry as? Point, let alt = point.coordinate.altitude { return alt }
+            return doubleProp("altitude") ?? doubleProp("enhanced_altitude")
+        }
         set { properties["altitude"] = newValue }
     }
 
@@ -170,7 +173,9 @@ extension Feature {
 
     /// Altitude per track point (meters).
     public var fitAltitudes: [Double?]? {
-        properties["fit_altitudes"] as? [Double?]
+        guard let multiLine = geometry as? MultiLineString else { return nil }
+        let alts = multiLine.lineStrings.flatMap { $0.coordinates.map(\.altitude) }
+        return alts.contains { $0 != nil } ? alts : nil
     }
 
     /// Raw FIT timestamps per track point (Date). Maps nil timestamps to nil.
@@ -198,14 +203,15 @@ extension Feature {
 
         var features: [Feature] = []
         for i in 0..<coords.count {
-            var f = Feature(Point(coords[i]))
+            var coord = coords[i]
+            if i < alt.count, let v = alt[i] { coord.altitude = v }
+            var f = Feature(Point(coord))
             f.properties["fit_type"] = "record"
             if i < hr.count, let v = hr[i] { f.properties["heart_rate"] = v }
             if i < cad.count, let v = cad[i] { f.properties["cadence"] = v }
             if i < pw.count, let v = pw[i] { f.properties["power"] = v }
             if i < spd.count, let v = spd[i] { f.properties["speed"] = v }
             if i < tmp.count, let v = tmp[i] { f.properties["temperature"] = v }
-            if i < alt.count, let v = alt[i] { f.properties["altitude"] = v }
             if i < ts.count, let v = ts[i] { f.properties["timestamp"] = v }
             features.append(f)
         }
