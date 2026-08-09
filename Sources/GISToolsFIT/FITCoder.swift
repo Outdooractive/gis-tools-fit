@@ -1,6 +1,14 @@
 import Foundation
 import GISTools
 
+/// One entry per `record` message. `lat`/`lon` are `nil` when the record has
+/// no GPS position (e.g. indoor/trainer activities).
+fileprivate struct RecordInfo {
+    var lat: Int32?
+    var lon: Int32?
+    var fields: [Int: Any]
+}
+
 // MARK: - FITCoder
 
 /// Reads FIT (Flexible and Interoperable Data Transfer) files.
@@ -91,52 +99,27 @@ public enum FITCoder {
     // MARK: - Conversion to GeoJSON
 
     private static func convertToGeoJSON(_ messages: [FITDecoder.RawMessage]) -> FeatureCollection {
-        var recordPoints: [(lat: Int32, lon: Int32, fields: [Int: Any])] = []
+        var allRecords: [RecordInfo] = []
         var lapStarts: [Int] = []
         var sessionMeta: [String: Sendable] = [:]
         var activityMeta: [String: Sendable] = [:]
         var deviceMeta: [String: Sendable] = [:]
 
-        // Per-point sensor data arrays (aligned to record order)
-        var heartRates: [Int?] = []
-        var cadences: [Int?] = []
-        var powers: [Int?] = []
-        var speeds: [Double?] = []
-        var temperatures: [Double?] = []
-        var altitudes: [Double?] = []
-        var timestamps: [UInt32?] = []
-
         for msg in messages {
             let messageType = FITProfile.MesgNum(msg.globalMessageNumber)
             switch messageType {
             case .record:
-                guard let lat = msg.fields[0] as? Int32,
-                      let lon = msg.fields[1] as? Int32
-                else { break }
-
-                // FIT sentinel for invalid (no GPS fix): 0x7FFFFFFF
-                guard lat != Int32.max, lon != Int32.max else { break }
-
-                recordPoints.append((lat, lon, msg.fields))
-
-                // Extract per-point sensor data — always append per record
-                if let v = msg.fields[3] as? UInt8 { heartRates.append(Int(v)) }
-                else { heartRates.append(nil) }
-                if let v = msg.fields[4] as? UInt8 { cadences.append(Int(v)) }
-                else { cadences.append(nil) }
-                if let v = msg.fields[7] as? UInt16 { powers.append(Int(v)) }
-                else { powers.append(nil) }
-                if let v = msg.fields[6] as? UInt16 { speeds.append(Double(v) / 1000.0) }
-                else { speeds.append(nil) }
-                if let v = msg.fields[139] as? Int8 { temperatures.append(Double(v)) }
-                else { temperatures.append(nil) }
-                if let v = msg.fields[2] as? UInt16 { altitudes.append(Double(v) / 5.0 - 500.0) }
-                else { altitudes.append(nil) }
-                if let v = msg.fields[253] as? UInt32 { timestamps.append(v) }
-                else { timestamps.append(nil) }
+                let lat = msg.fields[0] as? Int32
+                let lon = msg.fields[1] as? Int32
+                // FIT sentinel for invalid GPS fix: 0x7FFFFFFF
+                let validGPS = lat != nil && lon != nil && lat != Int32.max && lon != Int32.max
+                allRecords.append(RecordInfo(
+                    lat: validGPS ? lat : nil,
+                    lon: validGPS ? lon : nil,
+                    fields: msg.fields))
 
             case .lap:
-                lapStarts.append(recordPoints.count)
+                lapStarts.append(allRecords.count)
 
             case .session:
                 sessionMeta = applyFields(msg.fields, mesgNum: messageType.rawValue)
@@ -152,12 +135,79 @@ public enum FITCoder {
             }
         }
 
-        // Build track Feature with MultiLineString
+        // When at least one record carries a valid GPS position we keep the
+        // historical behaviour: build the track from GPS-bearing records only
+        // and align the per-point sensor arrays to those records. When NO
+        // record has GPS (indoor/trainer activity) we preserve every record's
+        // sensor data, indexed across all records, and emit an empty
+        // `MultiLineString` as the track geometry.
+        let anyGPS = allRecords.contains { $0.lat != nil && $0.lon != nil }
+        let trackRecords: [RecordInfo] = anyGPS
+            ? allRecords.filter { $0.lat != nil && $0.lon != nil }
+            : allRecords
+
+        // Build per-point sensor arrays aligned to `trackRecords`.
+        var heartRates: [Int?] = []
+        var cadences: [Int?] = []
+        var powers: [Int?] = []
+        var speeds: [Double?] = []
+        var temperatures: [Double?] = []
+        var altitudes: [Double?] = []
+        var timestamps: [UInt32?] = []
+
+        for record in trackRecords {
+            let fields = record.fields
+            if let v = fields[3] as? UInt8 { heartRates.append(Int(v)) }
+            else { heartRates.append(nil) }
+            if let v = fields[4] as? UInt8 { cadences.append(Int(v)) }
+            else { cadences.append(nil) }
+            if let v = fields[7] as? UInt16 { powers.append(Int(v)) }
+            else { powers.append(nil) }
+            if let v = fields[6] as? UInt16 { speeds.append(Double(v) / 1000.0) }
+            else { speeds.append(nil) }
+            if let v = fields[139] as? Int8 { temperatures.append(Double(v)) }
+            else { temperatures.append(nil) }
+            if let v = fields[2] as? UInt16 { altitudes.append(Double(v) / 5.0 - 500.0) }
+            else { altitudes.append(nil) }
+            if let v = fields[253] as? UInt32 { timestamps.append(v) }
+            else { timestamps.append(nil) }
+        }
+
+        // Lap starts need to be remapped to indices into `trackRecords` when
+        // GPS-bearing records have been filtered.
+        let trackRecordIndices = anyGPS
+            ? Set(allRecords.indices.filter { allRecords[$0].lat != nil && allRecords[$0].lon != nil })
+            : Set(allRecords.indices)
+        let indexMap: [Int: Int] = {
+            var map: [Int: Int] = [:]
+            var mapped = 0
+            for i in allRecords.indices {
+                if trackRecordIndices.contains(i) {
+                    map[i] = mapped
+                    mapped += 1
+                }
+            }
+            return map
+        }()
+        let trackLapStarts: [Int] = lapStarts.compactMap { indexMap[$0] }
+
+        // Build track Feature with MultiLineString (possibly empty for indoor
+        // activities — sensor data is still preserved on the Feature).
         var features: [Feature] = []
-        if !recordPoints.isEmpty {
-            let segments: [[Coordinate3D]] = buildSegments(recordPoints, altitudes: altitudes, lapStarts: lapStarts)
+        if !trackRecords.isEmpty {
+            let segments: [[Coordinate3D]] = buildSegments(
+                trackRecords,
+                altitudes: altitudes,
+                lapStarts: trackLapStarts)
             let lineStrings = segments.map { LineString(unchecked: $0) }
-            let multiLine = MultiLineString(unchecked: lineStrings)
+            let multiLine: MultiLineString
+            if lineStrings.isEmpty {
+                // Indoor activity: no usable GPS coordinates at all.
+                multiLine = MultiLineString()
+            }
+            else {
+                multiLine = MultiLineString(unchecked: lineStrings)
+            }
             var feature = Feature(multiLine)
             feature.properties["fit_type"] = FITRecordType.record.rawValue
             if !sessionMeta.isEmpty {
@@ -189,7 +239,7 @@ public enum FITCoder {
     // MARK: - Segment building
 
     private static func buildSegments(
-        _ points: [(lat: Int32, lon: Int32, fields: [Int: Any])],
+        _ points: [RecordInfo],
         altitudes: [Double?],
         lapStarts: [Int]
     ) -> [[Coordinate3D]] {
@@ -206,11 +256,12 @@ public enum FITCoder {
             let end = sorted[i + 1]
             guard end > start else { continue }
 
-            let coords: [Coordinate3D] = points[start..<end].enumerated().map { (i, p) in
+            let coords: [Coordinate3D] = points[start..<end].enumerated().compactMap { (i, p) in
+                guard let lat = p.lat, let lon = p.lon else { return nil }
                 let alt = start + i < altitudes.count ? altitudes[start + i] : nil
                 return Coordinate3D(
-                    x: FIT.degreesFromSemicircles(p.lon),
-                    y: FIT.degreesFromSemicircles(p.lat),
+                    x: FIT.degreesFromSemicircles(lon),
+                    y: FIT.degreesFromSemicircles(lat),
                     z: alt,
                     projection: .epsg4326)
             }
@@ -280,7 +331,8 @@ public enum FITCoder {
 
         let allCoords = multiLine.lineStrings.flatMap { $0.coordinates }
 
-        // Per-point sensor arrays
+        // Per-point sensor arrays — fall back to arrays sized for the existing
+        // coordinates so behaviour for GPS-bearing tracks is unchanged.
         let heartRates = track.fitHeartRates ?? Array(repeating: nil, count: allCoords.count)
         let cadences = track.fitCadences ?? Array(repeating: nil, count: allCoords.count)
         let powers = track.fitPowers ?? Array(repeating: nil, count: allCoords.count)
@@ -288,18 +340,38 @@ public enum FITCoder {
         let temperatures = track.fitTemperatures ?? Array(repeating: nil, count: allCoords.count)
         let rawTimestamps = track.properties["fit_timestamps"] as? [UInt32?] ?? Array(repeating: nil, count: allCoords.count)
 
-        // Lap boundaries: one lap per LineString segment
+        // Total record count. For GPS-bearing tracks every sensor array is
+        // sized to `allCoords.count`. For indoor activities where the
+        // MultiLineString is empty but per-point sensor arrays/timestamps are
+        // present, the record count is driven by those arrays instead.
+        let recordCount = [
+            allCoords.count,
+            heartRates.count,
+            cadences.count,
+            powers.count,
+            speeds.count,
+            temperatures.count,
+            rawTimestamps.count
+        ].max() ?? 0
+
+        // Lap boundaries: one lap per LineString segment. When the track has
+        // no GPS coordinates at all (indoor), ensure at least a single lap
+        // covers all sensor records.
         var lapStarts: [Int] = []
         var index = 0
         for lineString in multiLine.lineStrings {
             lapStarts.append(index)
             index += lineString.coordinates.count
         }
+        if lapStarts.isEmpty, recordCount > 0 {
+            lapStarts = [0]
+        }
 
         // Record messages
-        for i in 0..<allCoords.count {
+        for i in 0..<recordCount {
+            let coordinate: Coordinate3D? = i < allCoords.count ? allCoords[i] : nil
             messages.append(buildRecordMessage(
-                coordinate: allCoords[i],
+                coordinate: coordinate,
                 heartRate: i < heartRates.count ? heartRates[i] : nil,
                 cadence: i < cadences.count ? cadences[i] : nil,
                 power: i < powers.count ? powers[i] : nil,
@@ -312,12 +384,12 @@ public enum FITCoder {
         for lapStart in lapStarts {
             messages.append(buildLapMessage(
                 lapStart: lapStart,
-                totalRecords: allCoords.count,
+                totalRecords: recordCount,
                 track: track))
         }
 
         // Session message (from track properties)
-        messages.append(buildSessionMessage(from: track, totalRecords: allCoords.count))
+        messages.append(buildSessionMessage(from: track, totalRecords: recordCount))
 
         // Activity message (from foreign members)
         if let activityMeta = fc.fitActivity {
@@ -354,7 +426,7 @@ public enum FITCoder {
 
     /// Builds a `record` message (global 20).
     private static func buildRecordMessage(
-        coordinate: Coordinate3D,
+        coordinate: Coordinate3D?,
         heartRate: Int?,
         cadence: Int?,
         power: Int?,
@@ -362,21 +434,22 @@ public enum FITCoder {
         temperature: Double?,
         timestamp: UInt32?
     ) -> FITEncoder.EncodedMessage {
-        let lat = FIT.semicirclesFromDegrees(coordinate.latitude)
-        let lon = FIT.semicirclesFromDegrees(coordinate.longitude)
+        var fields: [FITEncoder.EncodedField] = []
 
-        var fields: [FITEncoder.EncodedField] = [
-            .init(num: 0, baseType: .sint32, data: FITEncoder.le32(lat)),
-            .init(num: 1, baseType: .sint32, data: FITEncoder.le32(lon)),
-        ]
+        if let coordinate {
+            let lat = FIT.semicirclesFromDegrees(coordinate.latitude)
+            let lon = FIT.semicirclesFromDegrees(coordinate.longitude)
+            fields.append(.init(num: 0, baseType: .sint32, data: FITEncoder.le32(lat)))
+            fields.append(.init(num: 1, baseType: .sint32, data: FITEncoder.le32(lon)))
 
-        // Altitude: convert back to raw uint16 (scaled by 5, offset 500)
-        if let altitude = coordinate.altitude {
-            let raw = UInt32((altitude + 500.0) * 5.0)
-            fields.append(.init(
-                num: 2,
-                baseType: .uint16,
-                data: FITEncoder.le16(UInt16(min(raw, UInt32(UInt16.max))))))
+            // Altitude: convert back to raw uint16 (scaled by 5, offset 500)
+            if let altitude = coordinate.altitude {
+                let raw = UInt32((altitude + 500.0) * 5.0)
+                fields.append(.init(
+                    num: 2,
+                    baseType: .uint16,
+                    data: FITEncoder.le16(UInt16(min(raw, UInt32(UInt16.max))))))
+            }
         }
 
         if let heartRate {

@@ -98,13 +98,11 @@ public enum FIT {
 
     /// The FIT epoch: 1989-12-31T00:00:00Z.
     /// FIT timestamps are seconds since this date.
-    public static let epoch: Date = {
-        var components = DateComponents()
-        components.year = 1989
-        components.month = 12
-        components.day = 31
-        return Calendar(identifier: .gregorian).date(from: components)!
-    }()
+    /// `631065600` is the number of seconds between 1970-01-01T00:00:00Z
+    /// (the Unix epoch) and the FIT epoch. Hard-coding the interval (rather
+    /// than building a `Date` from `DateComponents`) makes the value
+    /// independent of the process's local time zone.
+    public static let epoch: Date = Date(timeIntervalSince1970: 631065600)
 
     /// Converts a FIT timestamp (seconds since FIT epoch) to a Date.
     public static func dateFromTimestamp(_ timestamp: UInt32) -> Date {
