@@ -283,7 +283,7 @@ enum FITDecoder {
                 var values: [Any] = []
                 var offset = 0
                 while offset + baseSize <= bytes.count {
-                    let chunk = bytes[offset..<offset + baseSize]
+                    let chunk = Data(bytes[offset..<offset + baseSize])
                     values.append(decodeSingle(chunk, baseType: bt, le: le))
                     offset += baseSize
                 }
