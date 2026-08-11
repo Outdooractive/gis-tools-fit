@@ -50,47 +50,6 @@ public enum FITRecordType: String, Equatable, Sendable {
 
 }
 
-// MARK: - Known manufacturer and sport types
-
-/// Manufacturer identifiers from the FIT Profile.
-public enum FITManufacturer: UInt16, Equatable, Sendable {
-    case garmin = 1
-    case garminFr405 = 2
-    case garminFr305 = 3
-    case garminFr310xt = 4
-    case garminFr405mx = 5
-    case garminFr50 = 6
-    case garminFr10 = 7
-    case garminFr110 = 8
-    case dynastream = 9
-    case dynastreamOem = 10
-    case polar = 12
-    case suunto = 17
-    case bryton = 20
-    case wahooFitness = 26
-    case stryd = 44
-    case unknown = 0xFFFF
-
-    public init(_ value: UInt16) {
-        self = FITManufacturer(rawValue: value) ?? .unknown
-    }
-}
-
-/// Sport types from the FIT Profile.
-public enum FITSportType: UInt8, Equatable, Sendable {
-    case generic = 0
-    case running = 1
-    case cycling = 2
-    case swimming = 4
-    case hiking = 7
-    case walking = 9
-    case unknown = 0xFF
-
-    public init(_ value: UInt8) {
-        self = FITSportType(rawValue: value) ?? .unknown
-    }
-}
-
 // MARK: - Semicircle conversion
 
 /// FIT math and conversion helpers.
@@ -107,6 +66,13 @@ public enum FIT {
     /// Converts a FIT timestamp (seconds since FIT epoch) to a Date.
     public static func dateFromTimestamp(_ timestamp: UInt32) -> Date {
         epoch.addingTimeInterval(TimeInterval(timestamp))
+    }
+
+    /// Converts a Date to an ISO8601 string (with fractional seconds).
+    public static func iso8601String(from date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     /// Converts a FIT semicircle value to decimal degrees.

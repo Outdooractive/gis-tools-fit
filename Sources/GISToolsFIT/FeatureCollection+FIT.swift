@@ -67,7 +67,7 @@ extension FeatureCollection {
         var powers: [Int?] = []
         var speeds: [Double?] = []
         var temperatures: [Double?] = []
-        var timestamps: [UInt32?] = []
+        var timestamps: [String?] = []
 
         for pf in pointFeatures {
             let p = pf.properties
@@ -76,7 +76,7 @@ extension FeatureCollection {
             powers.append(p["power"] as? Int)
             speeds.append(p["speed"] as? Double)
             temperatures.append(p["temperature"] as? Double)
-            timestamps.append(p["timestamp"] as? UInt32)
+            timestamps.append(p["timestamp"] as? String)
         }
 
         if heartRates.contains(where: { $0 != nil }) { feature.properties["fit_heart_rates"] = heartRates }
@@ -103,9 +103,20 @@ extension FeatureCollection {
 
     /// The sport type of the activity (from session data).
     public var fitSport: String? {
+        // Session metadata (including sport) is merged onto the record track
+        // Feature, so look there first.
+        if let track = fitRecords.first,
+           let sport = track.properties["sport"] {
+            return "\(sport)"
+        }
         let act = foreignMembers["fit_activity"] as? [String: Sendable]
-        return act?["sport"] as? String ??
-               act?["sub_sport"] as? String
+        if let sport = act?["sport"] {
+            return "\(sport)"
+        }
+        if let sub = act?["sub_sport"] {
+            return "\(sub)"
+        }
+        return nil
     }
 
 }

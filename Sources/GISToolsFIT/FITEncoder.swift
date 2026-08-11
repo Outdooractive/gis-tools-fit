@@ -36,6 +36,79 @@ enum FITEncoder {
 
         /// The fields in definition order.
         let fields: [EncodedField]
+
+        /// Creates an encoded message from a global message number and fields.
+        init(globalMessageNumber: UInt16, fields: [EncodedField]) {
+            self.globalMessageNumber = globalMessageNumber
+            self.fields = fields
+        }
+    }
+
+    // MARK: - String encoding
+
+    static func encodeString(_ s: String) -> Data {
+        var data = Data(s.utf8)
+        data.append(0)  // null terminator
+        return data
+    }
+
+    // MARK: - Raw value encoding
+
+    /// Encodes a raw value (as produced by ``FITProfile/FieldMeta/rawValue(from:)``)
+    /// into the little-endian bytes for a base type.
+    static func encode(raw: Any, baseType: FITBaseType) -> Data {
+        if let arr = raw as? [Any] {
+            var data = Data()
+            for element in arr {
+                data.append(encode(raw: element, baseType: baseType))
+            }
+            return data
+        }
+        if let s = raw as? String {
+            return encodeString(s)
+        }
+        if let d = raw as? Double {
+            return encodeDouble(d, baseType: baseType)
+        }
+        if let i = raw as? Int64 {
+            return encodeInt64(i, baseType: baseType)
+        }
+        if let i = raw as? Int {
+            return encodeInt64(Int64(i), baseType: baseType)
+        }
+        return Data()
+    }
+
+    private static func encodeInt64(_ v: Int64, baseType: FITBaseType) -> Data {
+        switch baseType {
+        case .sint8: return Data([UInt8(bitPattern: Int8(truncatingIfNeeded: v))])
+        case .sint16: return le16(UInt16(bitPattern: Int16(truncatingIfNeeded: v)))
+        case .sint32: return le32(Int32(truncatingIfNeeded: v))
+        case .sint64: return le64(UInt64(bitPattern: v))
+        case .enumType, .uint8, .uint8z, .byte: return Data([UInt8(truncatingIfNeeded: v)])
+        case .uint16, .uint16z: return le16(UInt16(truncatingIfNeeded: v))
+        case .uint32, .uint32z: return le32(UInt32(truncatingIfNeeded: v))
+        case .uint64, .uint64z: return le64(UInt64(truncatingIfNeeded: v))
+        case .float32: return le32(Float(v).bitPattern)
+        case .float64: return le64(Float64(v).bitPattern)
+        case .string: return encodeString("\(v)")
+        }
+    }
+
+    private static func encodeDouble(_ v: Double, baseType: FITBaseType) -> Data {
+        switch baseType {
+        case .float32: return le32(Float(v).bitPattern)
+        case .float64: return le64(Float64(v).bitPattern)
+        case .sint8: return Data([UInt8(bitPattern: Int8(truncatingIfNeeded: Int64(v)))])
+        case .sint16: return le16(UInt16(bitPattern: Int16(truncatingIfNeeded: Int64(v))))
+        case .sint32: return le32(Int32(truncatingIfNeeded: Int64(v)))
+        case .sint64: return le64(UInt64(bitPattern: Int64(v)))
+        case .enumType, .uint8, .uint8z, .byte: return Data([UInt8(truncatingIfNeeded: Int64(v))])
+        case .uint16, .uint16z: return le16(UInt16(truncatingIfNeeded: Int64(v)))
+        case .uint32, .uint32z: return le32(UInt32(truncatingIfNeeded: Int64(v)))
+        case .uint64, .uint64z: return le64(UInt64(truncatingIfNeeded: Int64(v)))
+        case .string: return encodeString("\(v)")
+        }
     }
 
     // MARK: - Public API

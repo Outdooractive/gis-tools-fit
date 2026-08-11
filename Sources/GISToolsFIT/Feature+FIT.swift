@@ -19,6 +19,26 @@ extension Feature {
         }
     }
 
+    /// Returns the human-readable name for an enum-typed property value.
+    ///
+    /// FIT stores enum fields (e.g. `event`, `sport`, `event_type`) as raw
+    /// integers. This maps a property's integer value to its name.
+    ///
+    /// - Parameter key: The property key (e.g. `"event"`).
+    /// - Returns: The enum name (e.g. `"lap"`), or `nil` if the property is
+    ///   not an enum or the value is unknown.
+    public func fitEnumName(for key: String) -> String? {
+        guard let value = properties[key] else { return nil }
+        let intValue: Int
+        if let i = value as? Int { intValue = i }
+        else if let i64 = value as? Int64 { intValue = Int(i64) }
+        else if let u8 = value as? UInt8 { intValue = Int(u8) }
+        else if let u16 = value as? UInt16 { intValue = Int(u16) }
+        else if let u32 = value as? UInt32 { intValue = Int(u32) }
+        else { return nil }
+        return FIT.name(for: key, value: intValue)
+    }
+
     /// Timestamp of this record (seconds since FIT epoch).
     public var fitTimestamp: Date? {
         get { dateProp("fit_timestamp") }
@@ -178,10 +198,12 @@ extension Feature {
         return alts.contains { $0 != nil } ? alts : nil
     }
 
-    /// Raw FIT timestamps per track point (Date). Maps nil timestamps to nil.
+    /// Timestamps per track point (Date). Maps nil timestamps to nil.
     public var fitTimestamps: [Date?]? {
-        guard let raw = properties["fit_timestamps"] as? [UInt32?] else { return nil }
-        return raw.map { $0.map { FIT.dateFromTimestamp($0) } }
+        guard let raw = properties["fit_timestamps"] as? [String?] else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return raw.map { $0.flatMap { formatter.date(from: $0) } }
     }
 
     // MARK: - Point feature conversion
@@ -199,7 +221,7 @@ extension Feature {
         let spd = fitSpeeds ?? []
         let tmp = fitTemperatures ?? []
         let alt = fitAltitudes ?? []
-        let ts = properties["fit_timestamps"] as? [UInt32?] ?? []
+        let ts = properties["fit_timestamps"] as? [String?] ?? []
 
         var features: [Feature] = []
         for i in 0..<coords.count {
@@ -220,13 +242,16 @@ extension Feature {
 
     /// Point features within a time window.
     public func fitPointFeatures(from startDate: Date, to endDate: Date) -> FeatureCollection {
-        guard let ts = properties["fit_timestamps"] as? [UInt32?] else {
+        guard let ts = properties["fit_timestamps"] as? [String?] else {
             return fitPointFeatures()
         }
-        let startSec = UInt32(startDate.timeIntervalSince(FIT.epoch))
-        let endSec = UInt32(endDate.timeIntervalSince(FIT.epoch))
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let startSec = startDate.timeIntervalSince(FIT.epoch)
+        let endSec = endDate.timeIntervalSince(FIT.epoch)
         let indices = ts.indices.filter { i in
-            guard let t = ts[i] else { return false }
+            guard let s = ts[i], let date = formatter.date(from: s) else { return false }
+            let t = date.timeIntervalSince(FIT.epoch)
             return t >= startSec && t <= endSec
         }
         return sliceFeatures(at: indices)

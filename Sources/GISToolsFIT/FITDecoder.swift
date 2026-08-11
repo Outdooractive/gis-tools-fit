@@ -16,6 +16,18 @@ enum FITDecoder {
 
         /// Decoded field values keyed by field number.
         var fields: [Int: Any] = [:]
+
+        /// The decoded fields in definition order, each carrying its field
+        /// number, base type and decoded value. Preserving order and base
+        /// type allows a lossless re-encode of the message.
+        var orderedFields: [RawField] = []
+    }
+
+    /// A decoded field in definition order: field number, base type and value.
+    struct RawField {
+        var num: UInt8
+        var baseType: UInt8
+        var value: Any
     }
 
     /// A decoded definition message describing the layout of subsequent data messages.
@@ -211,6 +223,7 @@ enum FITDecoder {
                 let fieldBytes = try readBytes(Int(fd.size))
                 let value = decodeField(fieldBytes, baseType: fd.baseType, le: isLE)
                 rawMsg.fields[Int(fd.num)] = value
+                rawMsg.orderedFields.append(RawField(num: fd.num, baseType: fd.baseType, value: value))
             }
 
             // Read and skip developer field data
@@ -243,6 +256,7 @@ enum FITDecoder {
                 let fieldBytes = try readBytes(Int(fd.size))
                 let value = decodeField(fieldBytes, baseType: fd.baseType, le: isLE)
                 rawMsg.fields[Int(fd.num)] = value
+                rawMsg.orderedFields.append(RawField(num: fd.num, baseType: fd.baseType, value: value))
             }
 
             // Read and skip developer field data
@@ -383,6 +397,71 @@ enum FITDecoder {
                         | (UInt64(bytes[safe: 1] ?? 0) << 48) | (UInt64(bytes[safe: 0] ?? 0) << 56)
                 }
                 return Float64(bitPattern: raw)
+            case 10:  // uint8z
+                return bytes.first ?? 0
+            case 11:  // uint16z
+                let val = le
+                    ? UInt16(bytes[safe: 0] ?? 0) | (UInt16(bytes[safe: 1] ?? 0) << 8)
+                    : UInt16(bytes[safe: 1] ?? 0) | (UInt16(bytes[safe: 0] ?? 0) << 8)
+                return val
+            case 12:  // uint32z
+                let val: UInt32
+                if le {
+                    val = UInt32(bytes[safe: 0] ?? 0) | (UInt32(bytes[safe: 1] ?? 0) << 8)
+                        | (UInt32(bytes[safe: 2] ?? 0) << 16) | (UInt32(bytes[safe: 3] ?? 0) << 24)
+                }
+                else {
+                    val = UInt32(bytes[safe: 3] ?? 0) | (UInt32(bytes[safe: 2] ?? 0) << 8)
+                        | (UInt32(bytes[safe: 1] ?? 0) << 16) | (UInt32(bytes[safe: 0] ?? 0) << 24)
+                }
+                return val
+            case 13:  // byte
+                return bytes.first ?? 0
+            case 14:  // sint64
+                let raw: UInt64
+                if le {
+                    raw = UInt64(bytes[safe: 0] ?? 0) | (UInt64(bytes[safe: 1] ?? 0) << 8)
+                        | (UInt64(bytes[safe: 2] ?? 0) << 16) | (UInt64(bytes[safe: 3] ?? 0) << 24)
+                        | (UInt64(bytes[safe: 4] ?? 0) << 32) | (UInt64(bytes[safe: 5] ?? 0) << 40)
+                        | (UInt64(bytes[safe: 6] ?? 0) << 48) | (UInt64(bytes[safe: 7] ?? 0) << 56)
+                }
+                else {
+                    raw = UInt64(bytes[safe: 7] ?? 0) | (UInt64(bytes[safe: 6] ?? 0) << 8)
+                        | (UInt64(bytes[safe: 5] ?? 0) << 16) | (UInt64(bytes[safe: 4] ?? 0) << 24)
+                        | (UInt64(bytes[safe: 3] ?? 0) << 32) | (UInt64(bytes[safe: 2] ?? 0) << 40)
+                        | (UInt64(bytes[safe: 1] ?? 0) << 48) | (UInt64(bytes[safe: 0] ?? 0) << 56)
+                }
+                return Int64(bitPattern: raw)
+            case 15:  // uint64
+                let val: UInt64
+                if le {
+                    val = UInt64(bytes[safe: 0] ?? 0) | (UInt64(bytes[safe: 1] ?? 0) << 8)
+                        | (UInt64(bytes[safe: 2] ?? 0) << 16) | (UInt64(bytes[safe: 3] ?? 0) << 24)
+                        | (UInt64(bytes[safe: 4] ?? 0) << 32) | (UInt64(bytes[safe: 5] ?? 0) << 40)
+                        | (UInt64(bytes[safe: 6] ?? 0) << 48) | (UInt64(bytes[safe: 7] ?? 0) << 56)
+                }
+                else {
+                    val = UInt64(bytes[safe: 7] ?? 0) | (UInt64(bytes[safe: 6] ?? 0) << 8)
+                        | (UInt64(bytes[safe: 5] ?? 0) << 16) | (UInt64(bytes[safe: 4] ?? 0) << 24)
+                        | (UInt64(bytes[safe: 3] ?? 0) << 32) | (UInt64(bytes[safe: 2] ?? 0) << 40)
+                        | (UInt64(bytes[safe: 1] ?? 0) << 48) | (UInt64(bytes[safe: 0] ?? 0) << 56)
+                }
+                return val
+            case 16:  // uint64z
+                let val: UInt64
+                if le {
+                    val = UInt64(bytes[safe: 0] ?? 0) | (UInt64(bytes[safe: 1] ?? 0) << 8)
+                        | (UInt64(bytes[safe: 2] ?? 0) << 16) | (UInt64(bytes[safe: 3] ?? 0) << 24)
+                        | (UInt64(bytes[safe: 4] ?? 0) << 32) | (UInt64(bytes[safe: 5] ?? 0) << 40)
+                        | (UInt64(bytes[safe: 6] ?? 0) << 48) | (UInt64(bytes[safe: 7] ?? 0) << 56)
+                }
+                else {
+                    val = UInt64(bytes[safe: 7] ?? 0) | (UInt64(bytes[safe: 6] ?? 0) << 8)
+                        | (UInt64(bytes[safe: 5] ?? 0) << 16) | (UInt64(bytes[safe: 4] ?? 0) << 24)
+                        | (UInt64(bytes[safe: 3] ?? 0) << 32) | (UInt64(bytes[safe: 2] ?? 0) << 40)
+                        | (UInt64(bytes[safe: 1] ?? 0) << 48) | (UInt64(bytes[safe: 0] ?? 0) << 56)
+                }
+                return val
             default:
                 return Int(bytes.first ?? 0)
             }
