@@ -101,21 +101,32 @@ extension FeatureCollection {
         set { foreignMembers["fit_device"] = newValue }
     }
 
-    /// The sport type of the activity (from session data).
+    /// The sport type of the activity (from session data), mapped to its
+    /// human-readable name (e.g. `"running"`).
     public var fitSport: String? {
         // Session metadata (including sport) is merged onto the record track
         // Feature, so look there first.
         if let track = fitRecords.first,
-           let sport = track.properties["sport"] {
-            return "\(sport)"
+           let sport = track.properties["sport"],
+           let intValue = intValue(sport) {
+            return FIT.name(for: "sport", value: intValue)
         }
         let act = foreignMembers["fit_activity"] as? [String: Sendable]
-        if let sport = act?["sport"] {
-            return "\(sport)"
+        if let sport = act?["sport"], let intValue = intValue(sport) {
+            return FIT.name(for: "sport", value: intValue)
         }
-        if let sub = act?["sub_sport"] {
-            return "\(sub)"
+        if let sub = act?["sub_sport"], let intValue = intValue(sub) {
+            return FIT.name(for: "sub_sport", value: intValue)
         }
+        return nil
+    }
+
+    private func intValue(_ value: Sendable) -> Int? {
+        if let i = value as? Int { return i }
+        if let i64 = value as? Int64 { return Int(i64) }
+        if let u8 = value as? UInt8 { return Int(u8) }
+        if let u16 = value as? UInt16 { return Int(u16) }
+        if let u32 = value as? UInt32 { return Int(u32) }
         return nil
     }
 

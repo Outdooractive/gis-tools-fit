@@ -208,7 +208,7 @@ struct SampleFITDecodeTests {
     func fitSportFromSession() async throws {
         let data = try sampleData()
         let fc = try FITCoder.read(from: data)
-        #expect(fc.fitSport == "1")  // sport = running (1)
+        #expect(fc.fitSport == "running")  // sport = running (1)
     }
 
     // MARK: - Complete projection
