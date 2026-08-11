@@ -13,10 +13,12 @@ FIT (Flexible and Interoperable Data Transfer) file read **and write** support f
 - Pure Swift FIT decoder and encoder — no external dependencies
 - Reads and writes FIT 2.0 files with CRC validation
 - Record points → `Feature<MultiLineString>` with per-point sensor data as parallel arrays
-- Lap boundaries split the track into `MultiLineString` segments
+- Lap and Event messages → their own `Feature` markers with full metadata
 - Session, Lap, Event, File-ID, and Activity messages → `Feature` properties + `FeatureCollection` metadata
 - **Per-point arrays**: heart rate, cadence, power, speed, temperature, altitude, timestamps
 - **Typed convenience API** on `Feature` and `FeatureCollection` — no manual dictionary casting
+- **Content-preserving round-trip**: read → write reproduces every message and field
+- **Enum name mapping**: turn raw enum values (e.g. `event: 9`) into names (e.g. `"lap"`)
 - `fitPointFeatures()` → expand track into individual `Point` features with each record's sensor data
 - Time-window, distance-window, and fractional-window slicing of point data
 
@@ -74,6 +76,10 @@ into the corresponding FIT messages. Round-trip read → write → read preserve
 coordinates, heart rate, cadence, power, speed, temperature, altitude, and
 timestamps.
 
+The round-trip is **content-preserving**: every message (`file_id`, `activity`,
+`session`, `lap`, `record`, `event`, `device_info`) and every field is written
+back, so the re-encoded file decodes to the same values as the original.
+
 ### Track geometry
 
 ```swift
@@ -118,7 +124,7 @@ let pts = track.fitPointFeatures()
 pts.features.count                  // e.g. 5283
 pts.features[0].properties["heart_rate"]  // 120
 pts.features[0].properties["power"]       // 150
-pts.features[0].properties["timestamp"]   // 500100 (raw FIT timestamp)
+pts.features[0].properties["timestamp"]   // ISO8601 date string
 ```
 
 ### Time-based slicing
@@ -180,8 +186,31 @@ let device = fc.fitDevice
 print(device?["manufacturer"])  // e.g. "Garmin"
 
 let activity = fc.fitActivity
-print(fc.fitSport)             // e.g. "Cycling"
+print(fc.fitSport)             // e.g. "running" (mapped from the raw sport value)
 ```
+
+### Enum name mapping
+
+FIT stores enum-typed fields (e.g. `event`, `sport`, `event_type`) as raw
+integers. Use `FIT.name(for:value:)` to turn a value into its human-readable
+name, or `fitEnumName(for:)` on a `Feature` to map a property directly:
+
+```swift
+// Direct lookup
+FIT.name(for: "event", value: 9)         // "lap"
+FIT.name(for: "event_type", value: 1)    // "stop"
+FIT.name(for: "sport", value: 1)         // "running"
+FIT.name(for: "manufacturer", value: 1)  // "garmin"
+
+// Via a Feature's properties
+let event = fc.features.first { $0.fitType == .event }
+event.fitEnumName(for: "event")       // "timer"
+event.fitEnumName(for: "event_type")  // "start"
+```
+
+Field names that differ from their enum type name (e.g. `trigger` →
+`session_trigger`, `sensor_position` → `body_location`) are resolved
+automatically.
 
 ### Summary data
 

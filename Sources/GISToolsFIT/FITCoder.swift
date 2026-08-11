@@ -100,10 +100,12 @@ public enum FITCoder {
 
     private static func convertToGeoJSON(_ messages: [FITDecoder.RawMessage]) -> FeatureCollection {
         var allRecords: [RecordInfo] = []
-        var lapStarts: [Int] = []
+        var lapMessages: [FITDecoder.RawMessage] = []
+        var eventMessages: [FITDecoder.RawMessage] = []
         var sessionMeta: [String: Sendable] = [:]
         var activityMeta: [String: Sendable] = [:]
-        var deviceMeta: [String: Sendable] = [:]
+        var fileIdMeta: [String: Sendable] = [:]
+        var deviceInfoMeta: [String: Sendable] = [:]
 
         for msg in messages {
             let messageType = FITProfile.MesgNum(msg.globalMessageNumber)
@@ -119,7 +121,10 @@ public enum FITCoder {
                     fields: msg.fields))
 
             case .lap:
-                lapStarts.append(allRecords.count)
+                lapMessages.append(msg)
+
+            case .event:
+                eventMessages.append(msg)
 
             case .session:
                 sessionMeta = applyFields(msg.fields, mesgNum: messageType.rawValue)
@@ -128,7 +133,10 @@ public enum FITCoder {
                 activityMeta = applyFields(msg.fields, mesgNum: messageType.rawValue)
 
             case .fileId:
-                deviceMeta = applyFields(msg.fields, mesgNum: messageType.rawValue)
+                fileIdMeta = applyFields(msg.fields, mesgNum: messageType.rawValue)
+
+            case .deviceInfo:
+                deviceInfoMeta = applyFields(msg.fields, mesgNum: messageType.rawValue)
 
             default:
                 break
@@ -146,14 +154,16 @@ public enum FITCoder {
             ? allRecords.filter { $0.lat != nil && $0.lon != nil }
             : allRecords
 
-        // Build per-point sensor arrays aligned to `trackRecords`.
+        // Build per-point sensor arrays aligned to `trackRecords`. Every record
+        // field is captured as a per-point array so records round-trip fully.
         var heartRates: [Int?] = []
         var cadences: [Int?] = []
         var powers: [Int?] = []
         var speeds: [Double?] = []
         var temperatures: [Double?] = []
         var altitudes: [Double?] = []
-        var timestamps: [UInt32?] = []
+        var timestamps: [String?] = []
+        var perFieldArrays: [String: [Sendable?]] = [:]
 
         for record in trackRecords {
             let fields = record.fields
@@ -165,31 +175,22 @@ public enum FITCoder {
             else { powers.append(nil) }
             if let v = fields[6] as? UInt16 { speeds.append(Double(v) / 1000.0) }
             else { speeds.append(nil) }
-            if let v = fields[139] as? Int8 { temperatures.append(Double(v)) }
+            if let v = fields[13] as? Int8 { temperatures.append(Double(v)) }
             else { temperatures.append(nil) }
             if let v = fields[2] as? UInt16 { altitudes.append(Double(v) / 5.0 - 500.0) }
             else { altitudes.append(nil) }
-            if let v = fields[253] as? UInt32 { timestamps.append(v) }
-            else { timestamps.append(nil) }
-        }
-
-        // Lap starts need to be remapped to indices into `trackRecords` when
-        // GPS-bearing records have been filtered.
-        let trackRecordIndices = anyGPS
-            ? Set(allRecords.indices.filter { allRecords[$0].lat != nil && allRecords[$0].lon != nil })
-            : Set(allRecords.indices)
-        let indexMap: [Int: Int] = {
-            var map: [Int: Int] = [:]
-            var mapped = 0
-            for i in allRecords.indices {
-                if trackRecordIndices.contains(i) {
-                    map[i] = mapped
-                    mapped += 1
-                }
+            if let v = fields[253] as? UInt32 {
+                timestamps.append(FIT.iso8601String(from: FIT.dateFromTimestamp(v)))
             }
-            return map
-        }()
-        let trackLapStarts: [Int] = lapStarts.compactMap { indexMap[$0] }
+            else { timestamps.append(nil) }
+
+            // Capture every other record field as a per-point array.
+            let meta = applyFields(fields, mesgNum: FITProfile.MesgNum.record.rawValue)
+            for (name, value) in meta {
+                if name == "position_lat" || name == "position_long" || name == "timestamp" { continue }
+                perFieldArrays[name, default: []].append(value)
+            }
+        }
 
         // Build track Feature with MultiLineString (possibly empty for indoor
         // activities — sensor data is still preserved on the Feature).
@@ -198,7 +199,7 @@ public enum FITCoder {
             let segments: [[Coordinate3D]] = buildSegments(
                 trackRecords,
                 altitudes: altitudes,
-                lapStarts: trackLapStarts)
+                lapStarts: [])
             let lineStrings = segments.map { LineString(unchecked: $0) }
             let multiLine: MultiLineString
             if lineStrings.isEmpty {
@@ -222,12 +223,44 @@ public enum FITCoder {
             if temperatures.contains(where: { $0 != nil }) { feature.properties["fit_temperatures"] = temperatures }
             if timestamps.contains(where: { $0 != nil }) { feature.properties["fit_timestamps"] = timestamps }
 
+            // Store every other per-record field as a per-point array.
+            for (name, array) in perFieldArrays {
+                if array.contains(where: { $0 != nil }) {
+                    feature.properties["fit_record_\(name)"] = array
+                }
+            }
+
             features.append(feature)
         }
 
-        // Merge metadata into foreign members
+        // Emit each lap as its own Feature carrying its full metadata. The
+        // marker is placed at the lap's start position when available, falling
+        // back to the nearest record coordinate.
+        for lap in lapMessages {
+            var lapFeature = Feature(Point(markerCoordinate(for: lap, records: allRecords)))
+            lapFeature.properties["fit_type"] = FITRecordType.lap.rawValue
+            let meta = applyFields(lap.fields, mesgNum: FITProfile.MesgNum.lap.rawValue)
+            lapFeature.properties.merge(meta) { (_, new) in new }
+            features.append(lapFeature)
+        }
+
+        // Emit each event as its own Feature carrying its full metadata. The
+        // marker is placed at the record nearest the event's timestamp.
+        for event in eventMessages {
+            var eventFeature = Feature(Point(markerCoordinate(for: event, records: allRecords)))
+            eventFeature.properties["fit_type"] = FITRecordType.event.rawValue
+            let meta = applyFields(event.fields, mesgNum: FITProfile.MesgNum.event.rawValue)
+            eventFeature.properties.merge(meta) { (_, new) in new }
+            features.append(eventFeature)
+        }
+
+        // Merge metadata into foreign members. `fit_device` combines the
+        // file_id and device_info messages; `fit_activity` carries the
+        // activity message.
         var foreign: [String: Sendable] = [:]
         if !activityMeta.isEmpty { foreign["fit_activity"] = activityMeta as Sendable }
+        var deviceMeta = fileIdMeta
+        deviceMeta.merge(deviceInfoMeta) { (_, new) in new }
         if !deviceMeta.isEmpty { foreign["fit_device"] = deviceMeta as Sendable }
 
         // Build result (features is private(set), rebuild through init)
@@ -237,6 +270,55 @@ public enum FITCoder {
     }
 
     // MARK: - Segment building
+
+    /// Determines a valid coordinate for a marker Feature (lap/event).
+    ///
+    /// - For a lap, the lap's own `start_position_lat`/`start_position_long`
+    ///   fields are used when present.
+    /// - Otherwise the record whose timestamp is closest to the marker's
+    ///   timestamp is used, so the marker sits on the track.
+    /// - Falls back to the first GPS-bearing record.
+    private static func markerCoordinate(
+        for message: FITDecoder.RawMessage,
+        records: [RecordInfo]
+    ) -> Coordinate3D {
+        // Lap start position, if present.
+        if let lat = message.fields[3] as? Int32,
+           let lon = message.fields[4] as? Int32,
+           lat != Int32.max, lon != Int32.max {
+            return Coordinate3D(
+                x: FIT.degreesFromSemicircles(lon),
+                y: FIT.degreesFromSemicircles(lat),
+                projection: .epsg4326)
+        }
+
+        // Nearest record by timestamp.
+        let markerTime = message.fields[253] as? UInt32
+        let gpsRecords = records.filter { $0.lat != nil && $0.lon != nil }
+        if let markerTime, !gpsRecords.isEmpty {
+            let nearest = gpsRecords.min { a, b in
+                let ta = a.fields[253] as? UInt32 ?? UInt32.max
+                let tb = b.fields[253] as? UInt32 ?? UInt32.max
+                return abs(Int(ta) - Int(markerTime)) < abs(Int(tb) - Int(markerTime))
+            }
+            if let nearest, let lat = nearest.lat, let lon = nearest.lon {
+                return Coordinate3D(
+                    x: FIT.degreesFromSemicircles(lon),
+                    y: FIT.degreesFromSemicircles(lat),
+                    projection: .epsg4326)
+            }
+        }
+
+        // Fall back to the first GPS-bearing record.
+        if let first = gpsRecords.first, let lat = first.lat, let lon = first.lon {
+            return Coordinate3D(
+                x: FIT.degreesFromSemicircles(lon),
+                y: FIT.degreesFromSemicircles(lat),
+                projection: .epsg4326)
+        }
+
+        return Coordinate3D(latitude: 0, longitude: 0)
+    }
 
     private static func buildSegments(
         _ points: [RecordInfo],
@@ -304,7 +386,35 @@ public enum FITCoder {
         if let i16 = value as? Int16 { return Int(i16) }
         if let i8 = value as? Int8 { return Int(i8) }
         if let f = value as? Float { return Double(f) }
+        if let arr = value as? [Any] { return arr.map { asSendable($0) } }
         return "\(value)"
+    }
+
+    // MARK: - Generic message encoding
+
+    /// Reconstructs a FIT message from a dictionary of user-friendly values
+    /// (as produced by ``applyFields(_:mesgNum:)``) using the FIT Profile
+    /// metadata. Every field present in the dictionary is written back, so the
+    /// round-trip preserves the full content of the message.
+    private static func buildMessage(
+        mesgNum: UInt16,
+        from values: [String: Sendable]
+    ) -> FITEncoder.EncodedMessage {
+        let fields = FITProfile.fields(for: mesgNum)
+        var encoded: [FITEncoder.EncodedField] = []
+
+        for (fieldNum, meta) in fields.sorted(by: { $0.key < $1.key }) {
+            guard let value = values[meta.name] else { continue }
+            guard let raw = meta.rawValue(from: value) else { continue }
+            encoded.append(FITEncoder.EncodedField(
+                num: UInt8(fieldNum),
+                baseType: meta.baseType,
+                data: FITEncoder.encode(raw: raw, baseType: meta.baseType)))
+        }
+
+        return FITEncoder.EncodedMessage(
+            globalMessageNumber: mesgNum,
+            fields: encoded)
     }
 
     // MARK: - Conversion from GeoJSON
@@ -320,7 +430,9 @@ public enum FITCoder {
         var messages: [FITEncoder.EncodedMessage] = []
 
         // file_id (from device metadata)
-        messages.append(buildFileIdMessage(from: fc))
+        if let device = fc.fitDevice {
+            messages.append(buildMessage(mesgNum: FITProfile.MesgNum.fileId.rawValue, from: device))
+        }
 
         // Find the track Feature
         guard let track = fc.features.first(where: { $0.fitType == .record }),
@@ -338,7 +450,7 @@ public enum FITCoder {
         let powers = track.fitPowers ?? Array(repeating: nil, count: allCoords.count)
         let speeds = track.fitSpeeds ?? Array(repeating: nil, count: allCoords.count)
         let temperatures = track.fitTemperatures ?? Array(repeating: nil, count: allCoords.count)
-        let rawTimestamps = track.properties["fit_timestamps"] as? [UInt32?] ?? Array(repeating: nil, count: allCoords.count)
+        let rawTimestamps = track.properties["fit_timestamps"] as? [String?] ?? Array(repeating: nil, count: allCoords.count)
 
         // Total record count. For GPS-bearing tracks every sensor array is
         // sized to `allCoords.count`. For indoor activities where the
@@ -354,273 +466,78 @@ public enum FITCoder {
             rawTimestamps.count
         ].max() ?? 0
 
-        // Lap boundaries: one lap per LineString segment. When the track has
-        // no GPS coordinates at all (indoor), ensure at least a single lap
-        // covers all sensor records.
-        var lapStarts: [Int] = []
-        var index = 0
-        for lineString in multiLine.lineStrings {
-            lapStarts.append(index)
-            index += lineString.coordinates.count
-        }
-        if lapStarts.isEmpty, recordCount > 0 {
-            lapStarts = [0]
-        }
-
-        // Record messages
+        // Record messages — reconstruct each record from the per-point arrays.
+        let recordFields = FITProfile.fields(for: FITProfile.MesgNum.record.rawValue)
         for i in 0..<recordCount {
-            let coordinate: Coordinate3D? = i < allCoords.count ? allCoords[i] : nil
-            messages.append(buildRecordMessage(
-                coordinate: coordinate,
-                heartRate: i < heartRates.count ? heartRates[i] : nil,
-                cadence: i < cadences.count ? cadences[i] : nil,
-                power: i < powers.count ? powers[i] : nil,
-                speed: i < speeds.count ? speeds[i] : nil,
-                temperature: i < temperatures.count ? temperatures[i] : nil,
-                timestamp: i < rawTimestamps.count ? rawTimestamps[i] : nil))
+            var values: [String: Sendable] = [:]
+
+            // Position and altitude come from the geometry.
+            if i < allCoords.count {
+                let c = allCoords[i]
+                values["position_lat"] = FIT.semicirclesFromDegrees(c.latitude) as Sendable
+                values["position_long"] = FIT.semicirclesFromDegrees(c.longitude) as Sendable
+                if let alt = c.altitude {
+                    values["altitude"] = alt as Sendable
+                }
+            }
+
+            // Standard sensor arrays.
+            if i < heartRates.count, let v = heartRates[i] { values["heart_rate"] = v as Sendable }
+            if i < cadences.count, let v = cadences[i] { values["cadence"] = v as Sendable }
+            if i < powers.count, let v = powers[i] { values["power"] = v as Sendable }
+            if i < speeds.count, let v = speeds[i] { values["speed"] = v as Sendable }
+            if i < temperatures.count, let v = temperatures[i] { values["temperature"] = v as Sendable }
+            if i < rawTimestamps.count, let v = rawTimestamps[i] {
+                // The timestamp field is a date; store it as an ISO string so
+                // the generic encoder can convert it back to a FIT timestamp.
+                values["timestamp"] = v as Sendable
+            }
+
+            // Every other per-record field (skip those handled above).
+            let handled = Set(["position_lat", "position_long", "altitude", "heart_rate",
+                               "cadence", "power", "speed", "temperature", "timestamp"])
+            for (_, meta) in recordFields {
+                guard !handled.contains(meta.name) else { continue }
+                let key = "fit_record_\(meta.name)"
+                guard let array = track.properties[key] as? [Sendable?], i < array.count, let v = array[i] else { continue }
+                values[meta.name] = v
+            }
+
+            messages.append(buildMessage(mesgNum: FITProfile.MesgNum.record.rawValue, from: values))
         }
 
-        // Lap messages
-        for lapStart in lapStarts {
-            messages.append(buildLapMessage(
-                lapStart: lapStart,
-                totalRecords: recordCount,
-                track: track))
+        // Lap messages — one per lap Feature (fall back to a single lap when
+        // the track has no explicit lap Features).
+        let lapFeatures = fc.features.filter { $0.fitType == .lap }
+        if !lapFeatures.isEmpty {
+            for lapFeature in lapFeatures {
+                messages.append(buildMessage(mesgNum: FITProfile.MesgNum.lap.rawValue, from: lapFeature.properties))
+            }
+        } else if recordCount > 0 {
+            messages.append(buildMessage(mesgNum: FITProfile.MesgNum.lap.rawValue, from: track.properties))
         }
 
         // Session message (from track properties)
-        messages.append(buildSessionMessage(from: track, totalRecords: recordCount))
+        messages.append(buildMessage(mesgNum: FITProfile.MesgNum.session.rawValue, from: track.properties))
 
         // Activity message (from foreign members)
         if let activityMeta = fc.fitActivity {
-            messages.append(buildActivityMessage(from: activityMeta))
+            messages.append(buildMessage(mesgNum: FITProfile.MesgNum.activity.rawValue, from: activityMeta))
+        }
+
+        // Event messages — one per event Feature.
+        for eventFeature in fc.features.filter({ $0.fitType == .event }) {
+            messages.append(buildMessage(mesgNum: FITProfile.MesgNum.event.rawValue, from: eventFeature.properties))
+        }
+
+        // Device info message (from foreign members).
+        if let deviceMeta = fc.fitDevice {
+            messages.append(buildMessage(mesgNum: FITProfile.MesgNum.deviceInfo.rawValue, from: deviceMeta))
         }
 
         return messages
     }
 
-    // MARK: - Message builders
-
-    /// Builds the `file_id` message (global 0).
-    private static func buildFileIdMessage(
-        from fc: FeatureCollection
-    ) -> FITEncoder.EncodedMessage {
-        let device = fc.fitDevice ?? [:]
-
-        let fileType: UInt8 = uint8Value(device["type"]) ?? 4  // default: activity
-        let manufacturer: UInt16 = uint16Value(device["manufacturer"]) ?? 1
-        let product: UInt16 = uint16Value(device["product"]) ?? 0
-        let serial: UInt32 = uint32Value(device["serial_number"]) ?? 0
-        let timeCreated: UInt32 = uint32Value(device["time_created"]) ?? 0
-
-        return FITEncoder.EncodedMessage(
-            globalMessageNumber: FITProfile.MesgNum.fileId.rawValue,
-            fields: [
-                .init(num: 0, baseType: .enumType, data: Data([fileType])),
-                .init(num: 1, baseType: .uint16, data: FITEncoder.le16(manufacturer)),
-                .init(num: 2, baseType: .uint16, data: FITEncoder.le16(product)),
-                .init(num: 3, baseType: .uint32z, data: FITEncoder.le32(serial)),
-                .init(num: 253, baseType: .uint32, data: FITEncoder.le32(timeCreated)),
-            ])
-    }
-
-    /// Builds a `record` message (global 20).
-    private static func buildRecordMessage(
-        coordinate: Coordinate3D?,
-        heartRate: Int?,
-        cadence: Int?,
-        power: Int?,
-        speed: Double?,
-        temperature: Double?,
-        timestamp: UInt32?
-    ) -> FITEncoder.EncodedMessage {
-        var fields: [FITEncoder.EncodedField] = []
-
-        if let coordinate {
-            let lat = FIT.semicirclesFromDegrees(coordinate.latitude)
-            let lon = FIT.semicirclesFromDegrees(coordinate.longitude)
-            fields.append(.init(num: 0, baseType: .sint32, data: FITEncoder.le32(lat)))
-            fields.append(.init(num: 1, baseType: .sint32, data: FITEncoder.le32(lon)))
-
-            // Altitude: convert back to raw uint16 (scaled by 5, offset 500)
-            if let altitude = coordinate.altitude {
-                let raw = UInt32((altitude + 500.0) * 5.0)
-                fields.append(.init(
-                    num: 2,
-                    baseType: .uint16,
-                    data: FITEncoder.le16(UInt16(min(raw, UInt32(UInt16.max))))))
-            }
-        }
-
-        if let heartRate {
-            fields.append(.init(
-                num: 3,
-                baseType: .uint8,
-                data: Data([UInt8(min(heartRate, Int(UInt8.max)))])))
-        }
-        if let cadence {
-            fields.append(.init(
-                num: 4,
-                baseType: .uint8,
-                data: Data([UInt8(min(cadence, Int(UInt8.max)))])))
-        }
-        if let speed {
-            let raw = UInt32(speed * 1000.0)
-            fields.append(.init(
-                num: 6,
-                baseType: .uint16,
-                data: FITEncoder.le16(UInt16(min(raw, UInt32(UInt16.max))))))
-        }
-        if let power {
-            fields.append(.init(
-                num: 7,
-                baseType: .uint16,
-                data: FITEncoder.le16(UInt16(min(power, Int(UInt16.max))))))
-        }
-        if let temperature {
-            fields.append(.init(
-                num: 139,
-                baseType: .sint8,
-                data: Data([UInt8(bitPattern: Int8(temperature))])))
-        }
-        if let timestamp {
-            fields.append(.init(
-                num: 253,
-                baseType: .uint32,
-                data: FITEncoder.le32(timestamp)))
-        }
-
-        return FITEncoder.EncodedMessage(
-            globalMessageNumber: FITProfile.MesgNum.record.rawValue,
-            fields: fields)
-    }
-
-    /// Builds a `lap` message (global 9).
-    private static func buildLapMessage(
-        lapStart: Int,
-        totalRecords: Int,
-        track: Feature
-    ) -> FITEncoder.EncodedMessage {
-        let startTime: UInt32 = uint32Value(track.properties["start_time"]) ?? 0
-        let totalElapsedTime: Double = doubleValue(track.properties["total_elapsed_time"]) ?? 0.0
-        let totalTimerTime: Double = doubleValue(track.properties["total_timer_time"]) ?? totalElapsedTime
-        let totalDistance: Double = doubleValue(track.properties["total_distance"]) ?? 0.0
-        let totalCalories: Int = intValue(track.properties["total_calories"]) ?? 0
-        let avgSpeed: Double = doubleValue(track.properties["avg_speed"]) ?? 0.0
-        let maxSpeed: Double = doubleValue(track.properties["max_speed"]) ?? 0.0
-        let avgHeartRate: Int = intValue(track.properties["avg_heart_rate"]) ?? 0
-        let maxHeartRate: Int = intValue(track.properties["max_heart_rate"]) ?? 0
-        let avgCadence: Int = intValue(track.properties["avg_cadence"]) ?? 0
-        let maxCadence: Int = intValue(track.properties["max_cadence"]) ?? 0
-        let avgPower: Int = intValue(track.properties["avg_power"]) ?? 0
-        let maxPower: Int = intValue(track.properties["max_power"]) ?? 0
-        let totalAscent: Double = doubleValue(track.properties["total_ascent"]) ?? 0.0
-        let totalDescent: Double = doubleValue(track.properties["total_descent"]) ?? 0.0
-
-        // event = lap (9), event_type = stop (1)
-        let timestamp = uint32Value(track.properties["fit_timestamp"]) ?? uint32Value(track.properties["timestamp"]) ?? 0
-
-        let fields: [FITEncoder.EncodedField] = [
-            .init(num: 253, baseType: .uint32, data: FITEncoder.le32(timestamp)),
-            .init(num: 0, baseType: .uint32, data: FITEncoder.le32(startTime)),
-            .init(num: 5, baseType: .uint32, data: FITEncoder.le32(UInt32(totalElapsedTime * 1000.0))),
-            .init(num: 6, baseType: .uint32, data: FITEncoder.le32(UInt32(totalTimerTime * 1000.0))),
-            .init(num: 7, baseType: .uint32, data: FITEncoder.le32(UInt32(totalDistance * 100.0))),
-            .init(num: 9, baseType: .uint16, data: FITEncoder.le16(UInt16(min(totalCalories, Int(UInt16.max))))),
-            .init(num: 11, baseType: .uint16, data: FITEncoder.le16(UInt16(UInt32(avgSpeed * 1000.0)))),
-            .init(num: 12, baseType: .uint16, data: FITEncoder.le16(UInt16(UInt32(maxSpeed * 1000.0)))),
-            .init(num: 13, baseType: .uint8, data: Data([UInt8(min(avgHeartRate, Int(UInt8.max)))])),
-            .init(num: 14, baseType: .uint8, data: Data([UInt8(min(maxHeartRate, Int(UInt8.max)))])),
-            .init(num: 15, baseType: .uint8, data: Data([UInt8(min(avgCadence, Int(UInt8.max)))])),
-            .init(num: 16, baseType: .uint8, data: Data([UInt8(min(maxCadence, Int(UInt8.max)))])),
-            .init(num: 17, baseType: .uint16, data: FITEncoder.le16(UInt16(min(avgPower, Int(UInt16.max))))),
-            .init(num: 18, baseType: .uint16, data: FITEncoder.le16(UInt16(min(maxPower, Int(UInt16.max))))),
-            .init(num: 19, baseType: .uint16, data: FITEncoder.le16(UInt16(UInt32((totalAscent + 500.0) * 5.0)))),
-            .init(num: 20, baseType: .uint16, data: FITEncoder.le16(UInt16(UInt32((totalDescent + 500.0) * 5.0)))),
-            .init(num: 24, baseType: .enumType, data: Data([9])),  // event = lap
-            .init(num: 25, baseType: .enumType, data: Data([1])),  // event_type = stop
-        ]
-
-        _ = lapStart
-        _ = totalRecords
-
-        return FITEncoder.EncodedMessage(
-            globalMessageNumber: FITProfile.MesgNum.lap.rawValue,
-            fields: fields)
-    }
-
-    /// Builds a `session` message (global 18).
-    private static func buildSessionMessage(
-        from track: Feature,
-        totalRecords: Int
-    ) -> FITEncoder.EncodedMessage {
-        let startTime: UInt32 = uint32Value(track.properties["start_time"]) ?? 0
-        let totalElapsedTime: Double = doubleValue(track.properties["total_elapsed_time"]) ?? 0.0
-        let totalTimerTime: Double = doubleValue(track.properties["total_timer_time"]) ?? totalElapsedTime
-        let totalDistance: Double = doubleValue(track.properties["total_distance"]) ?? 0.0
-        let totalCalories: Int = intValue(track.properties["total_calories"]) ?? 0
-        let avgSpeed: Double = doubleValue(track.properties["avg_speed"]) ?? 0.0
-        let maxSpeed: Double = doubleValue(track.properties["max_speed"]) ?? 0.0
-        let avgHeartRate: Int = intValue(track.properties["avg_heart_rate"]) ?? 0
-        let maxHeartRate: Int = intValue(track.properties["max_heart_rate"]) ?? 0
-        let avgCadence: Int = intValue(track.properties["avg_cadence"]) ?? 0
-        let maxCadence: Int = intValue(track.properties["max_cadence"]) ?? 0
-        let avgPower: Int = intValue(track.properties["avg_power"]) ?? 0
-        let maxPower: Int = intValue(track.properties["max_power"]) ?? 0
-        let totalAscent: Double = doubleValue(track.properties["total_ascent"]) ?? 0.0
-        let totalDescent: Double = doubleValue(track.properties["total_descent"]) ?? 0.0
-        let sport: UInt8 = uint8Value(track.properties["sport"]) ?? 0
-        let timestamp = uint32Value(track.properties["fit_timestamp"]) ?? uint32Value(track.properties["timestamp"]) ?? 0
-        let numLaps: UInt16 = 1
-
-        _ = totalRecords
-
-        return FITEncoder.EncodedMessage(
-            globalMessageNumber: FITProfile.MesgNum.session.rawValue,
-            fields: [
-                .init(num: 253, baseType: .uint32, data: FITEncoder.le32(timestamp)),
-                .init(num: 0, baseType: .uint32, data: FITEncoder.le32(startTime)),
-                .init(num: 5, baseType: .uint32, data: FITEncoder.le32(UInt32(totalElapsedTime * 1000.0))),
-                .init(num: 6, baseType: .uint32, data: FITEncoder.le32(UInt32(totalTimerTime * 1000.0))),
-                .init(num: 7, baseType: .uint32, data: FITEncoder.le32(UInt32(totalDistance * 100.0))),
-                .init(num: 9, baseType: .uint16, data: FITEncoder.le16(UInt16(min(totalCalories, Int(UInt16.max))))),
-                .init(num: 11, baseType: .uint16, data: FITEncoder.le16(UInt16(UInt32(avgSpeed * 1000.0)))),
-                .init(num: 12, baseType: .uint16, data: FITEncoder.le16(UInt16(UInt32(maxSpeed * 1000.0)))),
-                .init(num: 13, baseType: .uint8, data: Data([UInt8(min(avgHeartRate, Int(UInt8.max)))])),
-                .init(num: 14, baseType: .uint8, data: Data([UInt8(min(maxHeartRate, Int(UInt8.max)))])),
-                .init(num: 15, baseType: .uint8, data: Data([UInt8(min(avgCadence, Int(UInt8.max)))])),
-                .init(num: 16, baseType: .uint8, data: Data([UInt8(min(maxCadence, Int(UInt8.max)))])),
-                .init(num: 17, baseType: .uint16, data: FITEncoder.le16(UInt16(min(avgPower, Int(UInt16.max))))),
-                .init(num: 18, baseType: .uint16, data: FITEncoder.le16(UInt16(min(maxPower, Int(UInt16.max))))),
-                .init(num: 19, baseType: .uint16, data: FITEncoder.le16(UInt16(UInt32(totalAscent * 5.0)))),
-                .init(num: 20, baseType: .uint16, data: FITEncoder.le16(UInt16(UInt32(totalDescent * 5.0)))),
-                .init(num: 23, baseType: .enumType, data: Data([sport])),
-                .init(num: 35, baseType: .uint16, data: FITEncoder.le16(numLaps)),
-            ])
-    }
-
-    /// Builds an `activity` message (global 34).
-    private static func buildActivityMessage(
-        from activityMeta: [String: Sendable]
-    ) -> FITEncoder.EncodedMessage {
-        let totalTimerTime: Double = doubleValue(activityMeta["total_timer_time"]) ?? 0.0
-        let numSessions: UInt16 = uint16Value(activityMeta["num_sessions"]) ?? 1
-        let activityType: UInt8 = uint8Value(activityMeta["type"]) ?? 0
-        let timestamp = uint32Value(activityMeta["timestamp"]) ?? 0
-        let localTimestamp = uint32Value(activityMeta["local_timestamp"]) ?? timestamp
-
-        return FITEncoder.EncodedMessage(
-            globalMessageNumber: FITProfile.MesgNum.activity.rawValue,
-            fields: [
-                .init(num: 253, baseType: .uint32, data: FITEncoder.le32(timestamp)),
-                .init(num: 0, baseType: .uint32, data: FITEncoder.le32(UInt32(totalTimerTime * 1000.0))),
-                .init(num: 1, baseType: .uint16, data: FITEncoder.le16(numSessions)),
-                .init(num: 2, baseType: .enumType, data: Data([activityType])),
-                .init(num: 5, baseType: .uint32, data: FITEncoder.le32(localTimestamp)),
-            ])
-    }
-
-    // MARK: - Property extraction helpers
 
     private static func intValue(_ value: Sendable?) -> Int? {
         guard let value else { return nil }

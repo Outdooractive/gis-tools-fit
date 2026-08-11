@@ -26,6 +26,9 @@ let package = Package(
             ]),
         .testTarget(
             name: "GISToolsFITTests",
-            dependencies: ["GISToolsFIT"]),
+            dependencies: ["GISToolsFIT"],
+            resources: [
+                .copy("TestData"),
+            ]),
     ]
 )
