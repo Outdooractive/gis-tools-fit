@@ -39,10 +39,10 @@ extension Feature {
         return FIT.name(for: key, value: intValue)
     }
 
-    /// Timestamp of this record (seconds since FIT epoch).
+    /// Timestamp of this record.
     public var fitTimestamp: Date? {
         get { dateProp("fit_timestamp") }
-        set { properties["fit_timestamp"] = newValue.map { ISO8601DateFormatter().string(from: $0) } }
+        set { properties["fit_timestamp"] = newValue.map { FIT.iso8601String(from: $0) } }
     }
 
     /// Heart rate in beats per minute.
@@ -91,14 +91,28 @@ extension Feature {
     }
 
     /// Latitude in decimal degrees.
+    ///
+    /// For a `Point` feature this is the coordinate's latitude. Otherwise the
+    /// value comes from a `position_lat` property, which is stored in decimal
+    /// degrees by this package.
     public var fitPositionLat: CLLocationDegrees? {
-        get { doubleProp("position_lat") }
+        get {
+            if let point = geometry as? Point { return point.coordinate.latitude }
+            return doubleProp("position_lat") ?? doubleProp("start_position_lat")
+        }
         set { properties["position_lat"] = newValue }
     }
 
     /// Longitude in decimal degrees.
+    ///
+    /// For a `Point` feature this is the coordinate's longitude. Otherwise the
+    /// value comes from a `position_long` property, which is stored in decimal
+    /// degrees by this package.
     public var fitPositionLon: CLLocationDegrees? {
-        get { doubleProp("position_long") }
+        get {
+            if let point = geometry as? Point { return point.coordinate.longitude }
+            return doubleProp("position_long") ?? doubleProp("start_position_long")
+        }
         set { properties["position_long"] = newValue }
     }
 
@@ -107,7 +121,7 @@ extension Feature {
     /// Lap start time.
     public var fitStartTime: Date? {
         get { dateProp("start_time") }
-        set { properties["start_time"] = newValue.map { ISO8601DateFormatter().string(from: $0) } }
+        set { properties["start_time"] = newValue.map { FIT.iso8601String(from: $0) } }
     }
 
     /// Total distance for the lap/session in meters.
@@ -201,14 +215,12 @@ extension Feature {
     /// Timestamps per track point (Date). Maps nil timestamps to nil.
     public var fitTimestamps: [Date?]? {
         guard let raw = properties["fit_timestamps"] as? [String?] else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return raw.map { $0.flatMap { formatter.date(from: $0) } }
+        return raw.map { $0.flatMap { FIT.date(fromISO8601: $0) } }
     }
 
     // MARK: - Point feature conversion
 
-    /// Converts the track's `MultiLineString` geometry into a `FeatureCollection` of
+    /// Converts the track's `MultiLineString` geometry into a collection of
     /// single `Point` features, each carrying the per-point sensor data for that record.
     ///
     /// The returned features have `fit_type = "record"` and per-point sensor values
@@ -223,6 +235,14 @@ extension Feature {
         let alt = fitAltitudes ?? []
         let ts = properties["fit_timestamps"] as? [String?] ?? []
 
+        // Every other per-record field, stored as `fit_record_<name>`.
+        let extraArrays: [(name: String, values: [Sendable?])] = properties.compactMap { key, value in
+            guard key.hasPrefix("fit_record_"),
+                  let array = value as? [Sendable?]
+            else { return nil }
+            return (String(key.dropFirst("fit_record_".count)), array)
+        }
+
         var features: [Feature] = []
         for i in 0..<coords.count {
             var coord = coords[i]
@@ -235,22 +255,30 @@ extension Feature {
             if i < spd.count, let v = spd[i] { f.properties["speed"] = v }
             if i < tmp.count, let v = tmp[i] { f.properties["temperature"] = v }
             if i < ts.count, let v = ts[i] { f.properties["timestamp"] = v }
+            for (name, values) in extraArrays {
+                if i < values.count, let v = values[i] {
+                    f.properties[name] = v
+                }
+            }
             features.append(f)
         }
         return FeatureCollection(features)
     }
 
     /// Point features within a time window.
+    ///
+    /// - Parameters:
+    ///   - startDate: The start of the time window (inclusive).
+    ///   - endDate: The end of the time window (inclusive).
+    /// - Returns: A collection of point features in the time range.
     public func fitPointFeatures(from startDate: Date, to endDate: Date) -> FeatureCollection {
         guard let ts = properties["fit_timestamps"] as? [String?] else {
             return fitPointFeatures()
         }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let startSec = startDate.timeIntervalSince(FIT.epoch)
         let endSec = endDate.timeIntervalSince(FIT.epoch)
         let indices = ts.indices.filter { i in
-            guard let s = ts[i], let date = formatter.date(from: s) else { return false }
+            guard let s = ts[i], let date = FIT.date(fromISO8601: s) else { return false }
             let t = date.timeIntervalSince(FIT.epoch)
             return t >= startSec && t <= endSec
         }
@@ -259,9 +287,10 @@ extension Feature {
 
     /// Point features within a distance window along the track.
     ///
-    /// - Parameter from: Start distance in meters from the beginning of the track.
-    /// - Parameter to: End distance in meters.
-    /// - Returns: A ``FeatureCollection`` of point features in the distance range.
+    /// - Parameters:
+    ///   - startMeters: Start distance in meters from the beginning of the track.
+    ///   - endMeters: End distance in meters.
+    /// - Returns: A collection of point features in the distance range.
     public func fitPointFeatures(from startMeters: Double, to endMeters: Double) -> FeatureCollection {
         let distances = cumulativeDistances
         let indices = distances.indices.filter { i in
@@ -272,9 +301,10 @@ extension Feature {
 
     /// Point features within a fractional window along the track length.
     ///
-    /// - Parameter from: Start fraction (0.0–1.0, inclusive).
-    /// - Parameter to: End fraction (0.0–1.0, inclusive).
-    /// - Returns: A ``FeatureCollection`` of point features in the fraction range.
+    /// - Parameters:
+    ///   - start: Start fraction (0.0–1.0, inclusive).
+    ///   - end: End fraction (0.0–1.0, inclusive).
+    /// - Returns: A collection of point features in the fraction range.
     public func fitPointFeatures(fraction start: Double, to end: Double) -> FeatureCollection {
         let clampStart = max(0.0, min(start, 1.0))
         let clampEnd = max(clampStart, min(end, 1.0))
@@ -284,10 +314,10 @@ extension Feature {
         return fitPointFeatures(from: clampStart * totalDistance, to: clampEnd * totalDistance)
     }
 
-    /// Creates a track ``Feature`` from a collection of Point features
+    /// Creates a track Feature from a collection of Point features
     /// produced by ``fitPointFeatures()``.
     ///
-    /// See ``FeatureCollection/fitTrackFromPointFeatures()``.
+    /// See `FeatureCollection.fitTrackFromPointFeatures()`.
     public init?(fitTrackFrom pointFeatures: FeatureCollection) {
         guard let track = pointFeatures.fitTrackFromPointFeatures() else { return nil }
         self = track
@@ -313,7 +343,7 @@ extension Feature {
         return distances
     }
 
-    /// Builds a FeatureCollection from a subset of track-point indices.
+    /// Builds a feature collection from a subset of track-point indices.
     private func sliceFeatures(at indices: [Int]) -> FeatureCollection {
         let allFeatures = fitPointFeatures()
         let set = Set(indices)
@@ -327,11 +357,14 @@ extension Feature {
         if let i = properties[key] as? Int { return i }
         if let i64 = properties[key] as? Int64 { return Int(i64) }
         if let d = properties[key] as? Double { return Int(d) }
+        if let u64 = properties[key] as? UInt64 { return Int(clamping: u64) }
         if let u32 = properties[key] as? UInt32 { return Int(u32) }
         if let u16 = properties[key] as? UInt16 { return Int(u16) }
         if let u8 = properties[key] as? UInt8 { return Int(u8) }
+        if let i32 = properties[key] as? Int32 { return Int(i32) }
         if let i16 = properties[key] as? Int16 { return Int(i16) }
         if let i8 = properties[key] as? Int8 { return Int(i8) }
+        if let f = properties[key] as? Float { return Int(f) }
         return nil
     }
 
@@ -339,19 +372,20 @@ extension Feature {
         if let d = properties[key] as? Double { return d }
         if let i = properties[key] as? Int { return Double(i) }
         if let i64 = properties[key] as? Int64 { return Double(i64) }
+        if let u64 = properties[key] as? UInt64 { return Double(u64) }
         if let u32 = properties[key] as? UInt32 { return Double(u32) }
         if let u16 = properties[key] as? UInt16 { return Double(u16) }
         if let u8 = properties[key] as? UInt8 { return Double(u8) }
+        if let i32 = properties[key] as? Int32 { return Double(i32) }
         if let i16 = properties[key] as? Int16 { return Double(i16) }
+        if let i8 = properties[key] as? Int8 { return Double(i8) }
         if let f = properties[key] as? Float { return Double(f) }
         return nil
     }
 
     private func dateProp(_ key: String) -> Date? {
         guard let s = properties[key] as? String else { return nil }
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.date(from: s)
+        return FIT.date(fromISO8601: s)
     }
 
 }

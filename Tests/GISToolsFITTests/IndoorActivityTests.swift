@@ -69,7 +69,7 @@ struct IndoorActivityTests {
             return
         }
         let fc1 = try FITCoder.read(from: data)
-        let encoded = try FITCoder.write(from: fc1)
+        let encoded = try FITCoder.write(fc1)
         let fc2 = try FITCoder.read(from: encoded)
 
         guard let track = fc2.features.first else {

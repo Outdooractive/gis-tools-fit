@@ -54,13 +54,15 @@ enum FITProfile {
             }
             // Date fields: convert the raw FIT timestamp to an ISO8601 string.
             if isDate {
-                if let u32 = raw as? UInt32 {
-                    return FIT.iso8601String(from: FIT.dateFromTimestamp(u32))
-                }
-                if let i = raw as? Int { return FIT.iso8601String(from: FIT.dateFromTimestamp(UInt32(i))) }
-                if let i64 = raw as? Int64 { return FIT.iso8601String(from: FIT.dateFromTimestamp(UInt32(i64))) }
-                if let u64 = raw as? UInt64 { return FIT.iso8601String(from: FIT.dateFromTimestamp(UInt32(u64))) }
-                return nil
+                let timestamp: UInt32
+                if let u32 = raw as? UInt32 { timestamp = u32 }
+                else if let i = raw as? Int, i >= 0, i <= Int(UInt32.max) { timestamp = UInt32(i) }
+                else if let i64 = raw as? Int64, i64 >= 0, i64 <= Int64(UInt32.max) { timestamp = UInt32(i64) }
+                else if let u64 = raw as? UInt64, u64 <= UInt64(UInt32.max) { timestamp = UInt32(u64) }
+                else { return nil }
+                // 0xFFFFFFFF is the FIT invalid timestamp.
+                guard timestamp != UInt32.max else { return nil }
+                return FIT.iso8601String(from: FIT.dateFromTimestamp(timestamp))
             }
             guard let num = raw as? Double else {
                 // Already a string, return as-is
@@ -107,12 +109,8 @@ enum FITProfile {
             }
             // Date fields: convert the ISO8601 string back to a FIT timestamp.
             if isDate {
-                if let s = formatted as? String {
-                    let formatter = ISO8601DateFormatter()
-                    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                    if let date = formatter.date(from: s) {
-                        return Int64(date.timeIntervalSince(FIT.epoch))
-                    }
+                if let s = formatted as? String, let date = FIT.date(fromISO8601: s) {
+                    return Int64(FIT.timestamp(from: date))
                 }
                 return nil
             }
@@ -202,15 +200,17 @@ enum FITProfile {
     // Message 20: record
     private static let recordFields: [Int: FieldMeta] = [
         253: .plain("timestamp", units: "s", baseType: .uint32, isDate: true),
-        0: .plain("position_lat", units: "semicircles", baseType: .sint32),
-        1: .plain("position_long", units: "semicircles", baseType: .sint32),
+        0: .scaled("position_lat", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        1: .scaled("position_long", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
         2: .scaled("altitude", units: "m", scale: 5, offset: 500, baseType: .uint16),
         3: .plain("heart_rate", units: "bpm", baseType: .uint8),
         4: .plain("cadence", units: "rpm", baseType: .uint8),
         5: .scaled("distance", units: "m", scale: 100, offset: 0, baseType: .uint32),
         6: .scaled("speed", units: "m/s", scale: 1000, offset: 0, baseType: .uint16),
         7: .plain("power", units: "watts", baseType: .uint16),
-        8: .scaled("compressed_speed_distance", units: "m/s", scale: 100, offset: 0, baseType: .byte),
+        // A packed 3-byte field (12-bit speed + 12-bit distance). Exposed as
+        // raw bytes so that it round-trips without loss.
+        8: .plain("compressed_speed_distance", units: "raw", baseType: .byte),
         9: .scaled("grade", units: "%", scale: 100, offset: 0, baseType: .sint16),
         10: .plain("resistance", units: "", baseType: .uint8),
         11: .scaled("time_from_course", units: "s", scale: 1000, offset: 0, baseType: .sint32),
@@ -269,7 +269,7 @@ enum FITProfile {
         96: .plain("ndl_time", units: "s", baseType: .uint32),
         97: .plain("cns_load", units: "percent", baseType: .uint8),
         98: .plain("n2_load", units: "percent", baseType: .uint16),
-        99: .plain("respiration_rate", units: "s", baseType: .uint8),
+        99: .plain("respiration_rate", units: "breaths/min", baseType: .uint8),
         108: .scaled("enhanced_respiration_rate", units: "Breaths/min", scale: 100, offset: 0, baseType: .uint16),
         114: .plain("grit", units: "", baseType: .float32),
         115: .plain("flow", units: "", baseType: .float32),
@@ -294,10 +294,10 @@ enum FITProfile {
         0: .plain("event", units: "", baseType: .enumType),
         1: .plain("event_type", units: "", baseType: .enumType),
         2: .plain("start_time", units: "", baseType: .uint32, isDate: true),
-        3: .plain("start_position_lat", units: "semicircles", baseType: .sint32),
-        4: .plain("start_position_long", units: "semicircles", baseType: .sint32),
-        5: .plain("end_position_lat", units: "semicircles", baseType: .sint32),
-        6: .plain("end_position_long", units: "semicircles", baseType: .sint32),
+        3: .scaled("start_position_lat", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        4: .scaled("start_position_long", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        5: .scaled("end_position_lat", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        6: .scaled("end_position_long", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
         7: .scaled("total_elapsed_time", units: "s", scale: 1000, offset: 0, baseType: .uint32),
         8: .scaled("total_timer_time", units: "s", scale: 1000, offset: 0, baseType: .uint32),
         9: .scaled("total_distance", units: "m", scale: 100, offset: 0, baseType: .uint32),
@@ -401,8 +401,8 @@ enum FITProfile {
         124: .plain("min_temperature", units: "C", baseType: .sint8),
         136: .scaled("enhanced_avg_respiration_rate", units: "Breaths/min", scale: 100, offset: 0, baseType: .uint16),
         137: .scaled("enhanced_max_respiration_rate", units: "Breaths/min", scale: 100, offset: 0, baseType: .uint16),
-        147: .plain("avg_respiration_rate", units: "", baseType: .uint8),
-        148: .plain("max_respiration_rate", units: "", baseType: .uint8),
+        147: .plain("avg_respiration_rate", units: "breaths/min", baseType: .uint8),
+        148: .plain("max_respiration_rate", units: "breaths/min", baseType: .uint8),
         149: .plain("total_grit", units: "kGrit", baseType: .float32),
         150: .plain("total_flow", units: "Flow", baseType: .float32),
         151: .plain("jump_count", units: "", baseType: .uint16),
@@ -422,8 +422,8 @@ enum FITProfile {
         0: .plain("event", units: "", baseType: .enumType),
         1: .plain("event_type", units: "", baseType: .enumType),
         2: .plain("start_time", units: "", baseType: .uint32, isDate: true),
-        3: .plain("start_position_lat", units: "semicircles", baseType: .sint32),
-        4: .plain("start_position_long", units: "semicircles", baseType: .sint32),
+        3: .scaled("start_position_lat", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        4: .scaled("start_position_long", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
         5: .plain("sport", units: "", baseType: .enumType),
         6: .plain("sub_sport", units: "", baseType: .enumType),
         7: .scaled("total_elapsed_time", units: "s", scale: 1000, offset: 0, baseType: .uint32),
@@ -447,17 +447,17 @@ enum FITProfile {
         26: .plain("num_laps", units: "", baseType: .uint16),
         27: .plain("event_group", units: "", baseType: .uint8),
         28: .plain("trigger", units: "", baseType: .enumType),
-        29: .plain("nec_lat", units: "semicircles", baseType: .sint32),
-        30: .plain("nec_long", units: "semicircles", baseType: .sint32),
-        31: .plain("swc_lat", units: "semicircles", baseType: .sint32),
-        32: .plain("swc_long", units: "semicircles", baseType: .sint32),
+        29: .scaled("nec_lat", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        30: .scaled("nec_long", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        31: .scaled("swc_lat", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        32: .scaled("swc_long", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
         33: .plain("num_lengths", units: "lengths", baseType: .uint16),
         34: .plain("normalized_power", units: "watts", baseType: .uint16),
         35: .scaled("training_stress_score", units: "tss", scale: 10, offset: 0, baseType: .uint16),
         36: .scaled("intensity_factor", units: "if", scale: 1000, offset: 0, baseType: .uint16),
         37: .plain("left_right_balance", units: "", baseType: .uint16),
-        38: .plain("end_position_lat", units: "semicircles", baseType: .sint32),
-        39: .plain("end_position_long", units: "semicircles", baseType: .sint32),
+        38: .scaled("end_position_lat", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
+        39: .scaled("end_position_long", units: "degrees", scale: FIT.semicirclesPerDegree, baseType: .sint32),
         41: .scaled("avg_stroke_count", units: "strokes/lap", scale: 10, offset: 0, baseType: .uint32),
         42: .scaled("avg_stroke_distance", units: "m", scale: 100, offset: 0, baseType: .uint16),
         43: .plain("swim_stroke", units: "swim_stroke", baseType: .enumType),
@@ -548,16 +548,16 @@ enum FITProfile {
         144: .plain("end_cns", units: "percent", baseType: .uint8),
         145: .plain("start_n2", units: "percent", baseType: .uint16),
         146: .plain("end_n2", units: "percent", baseType: .uint16),
-        147: .plain("avg_respiration_rate", units: "", baseType: .uint8),
-        148: .plain("max_respiration_rate", units: "", baseType: .uint8),
-        149: .plain("min_respiration_rate", units: "", baseType: .uint8),
+        147: .plain("avg_respiration_rate", units: "breaths/min", baseType: .uint8),
+        148: .plain("max_respiration_rate", units: "breaths/min", baseType: .uint8),
+        149: .plain("min_respiration_rate", units: "breaths/min", baseType: .uint8),
         150: .plain("min_temperature", units: "C", baseType: .sint8),
         155: .plain("o2_toxicity", units: "OTUs", baseType: .uint16),
         156: .plain("dive_number", units: "", baseType: .uint32),
         168: .scaled("training_load_peak", units: "", scale: 65536, offset: 0, baseType: .sint32),
         169: .scaled("enhanced_avg_respiration_rate", units: "Breaths/min", scale: 100, offset: 0, baseType: .uint16),
         170: .scaled("enhanced_max_respiration_rate", units: "Breaths/min", scale: 100, offset: 0, baseType: .uint16),
-        180: .scaled("enhanced_min_respiration_rate", units: "", scale: 100, offset: 0, baseType: .uint16),
+        180: .scaled("enhanced_min_respiration_rate", units: "Breaths/min", scale: 100, offset: 0, baseType: .uint16),
         181: .plain("total_grit", units: "kGrit", baseType: .float32),
         182: .plain("total_flow", units: "Flow", baseType: .float32),
         183: .plain("jump_count", units: "", baseType: .uint16),

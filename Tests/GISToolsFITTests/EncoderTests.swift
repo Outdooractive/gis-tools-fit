@@ -19,7 +19,7 @@ struct EncoderTests {
         let fc1 = try FITCoder.read(from: original)
 
         // Encode it back to binary
-        let encoded = try FITCoder.write(from: fc1)
+        let encoded = try FITCoder.write(fc1)
 
         // Decode the encoded data
         let fc2 = try FITCoder.read(from: encoded)
@@ -63,7 +63,7 @@ struct EncoderTests {
             return
         }
 
-        let encoded = try FITCoder.write(from: fc1)
+        let encoded = try FITCoder.write(fc1)
         let fc2 = try FITCoder.read(from: encoded)
         guard let track2 = fc2.features.first else {
             Issue.record("Missing encoded track")
@@ -108,7 +108,7 @@ struct EncoderTests {
         }
 
         let fc1 = try FITCoder.read(from: original)
-        let encoded = try FITCoder.write(from: fc1)
+        let encoded = try FITCoder.write(fc1)
         let fc2 = try FITCoder.read(from: encoded)
 
         // Device metadata should be preserved
@@ -128,7 +128,7 @@ struct EncoderTests {
         }
 
         let fc = try FITCoder.read(from: original)
-        let encoded = try FITCoder.write(from: fc)
+        let encoded = try FITCoder.write(fc)
 
         // Decode with CRC validation enabled — should not throw
         let messages = try FITDecoder.decode(data: encoded, verifyCRC: true)
@@ -143,7 +143,7 @@ struct EncoderTests {
         }
 
         let fc = try FITCoder.read(from: original)
-        let encoded = try FITCoder.write(from: fc)
+        let encoded = try FITCoder.write(fc)
 
         // Verify ".FIT" magic
         #expect(encoded[8] == 0x2E)  // .
@@ -166,7 +166,7 @@ struct EncoderTests {
     func writeThrowsOnEmptyCollection() async throws {
         let fc = FeatureCollection()
         #expect(throws: FITError.self) {
-            try FITCoder.write(from: fc)
+            try FITCoder.write(fc)
         }
     }
 
@@ -176,7 +176,7 @@ struct EncoderTests {
         let point = Point(Coordinate3D(latitude: 47.0, longitude: 11.0))
         let fc = FeatureCollection([Feature(point)])
         #expect(throws: FITError.self) {
-            try FITCoder.write(from: fc)
+            try FITCoder.write(fc)
         }
     }
 
@@ -202,7 +202,7 @@ struct EncoderTests {
         }
 
         let newFC = FeatureCollection([rebuilt])
-        let encoded = try FITCoder.write(from: newFC)
+        let encoded = try FITCoder.write(newFC)
         let fc2 = try FITCoder.read(from: encoded)
 
         guard let track2 = fc2.features.first else {
@@ -219,7 +219,7 @@ struct EncoderTests {
 
     @Test
     func encoderProducesValidEmptyFile() async throws {
-        let data = FITEncoder.encode(messages: [])
+        let data = try FITEncoder.encode(messages: [])
         // Header (12) + CRC (2) = 14
         #expect(data.count == 14)
         // ".FIT" magic
@@ -236,7 +236,7 @@ struct EncoderTests {
 
     @Test
     func encoderWithHeaderCRC() async throws {
-        let data = FITEncoder.encode(messages: [], includeHeaderCRC: true)
+        let data = try FITEncoder.encode(messages: [], includeHeaderCRC: true)
         // Header (14) + CRC (2) = 16
         #expect(data.count == 16)
         // Header size byte

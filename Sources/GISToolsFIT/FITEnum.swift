@@ -18,8 +18,19 @@ extension FIT {
     /// - Returns: The name, or `nil` if unknown.
     public static func name(for fieldType: String, value: Int) -> String? {
         let type = fieldAliases[fieldType] ?? fieldType
-        guard let table = tables[type] else { return nil }
-        return table[value]
+        if let table = tables[type], let name = table[value] {
+            return name
+        }
+        // `file_id.type` and `activity.type` share the property name `type`
+        // but use different enum tables. Prefer the file table (the aliased
+        // type) and fall back to the activity table when the value is not a
+        // member of it. Value `1` is ambiguous (`device` vs
+        // `auto_multi_sport`); the file table wins for backwards
+        // compatibility.
+        if type == "file", let name = tables["activity"]?[value] {
+            return name
+        }
+        return nil
     }
 
     /// Returns the human-readable name for an enum value, or `nil`.

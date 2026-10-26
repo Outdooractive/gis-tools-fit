@@ -310,7 +310,7 @@ struct SampleFITDecodeTests {
     func roundTripPreservesMessageCounts() async throws {
         let original = try sampleData()
         let fc = try FITCoder.read(from: original)
-        let reencoded = try FITCoder.write(from: fc)
+        let reencoded = try FITCoder.write(fc)
 
         let redecoded = try FITDecoder.decode(data: reencoded, verifyCRC: true)
         let originalMessages = try FITDecoder.decode(data: original, verifyCRC: true)

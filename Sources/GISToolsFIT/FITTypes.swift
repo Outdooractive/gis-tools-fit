@@ -3,11 +3,14 @@ import GISTools
 
 // MARK: - FIT Coder Error
 
-/// Errors thrown by FIT reading operations.
-public enum FITError: LocalizedError {
+/// Errors thrown by FIT reading and writing operations.
+public enum FITError: LocalizedError, Equatable {
 
     /// The file could not be read.
     case fileReadError(detail: String)
+
+    /// The file could not be written.
+    case fileWriteError(detail: String)
 
     /// The file is not a valid FIT file.
     case invalidFile(detail: String)
@@ -19,6 +22,7 @@ public enum FITError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .fileReadError(let d): "Could not read FIT file: \(d)"
+        case .fileWriteError(let d): "Could not write FIT file: \(d)"
         case .invalidFile(let d): "Invalid FIT file: \(d)"
         case .parseError(let d): "FIT parse error: \(d)"
         }
@@ -63,9 +67,40 @@ public enum FIT {
     /// independent of the process's local time zone.
     public static let epoch: Date = Date(timeIntervalSince1970: 631065600)
 
+    /// The number of semicircles in one degree: `2^31 / 180`.
+    public static let semicirclesPerDegree: Double = 2147483648.0 / 180.0
+
     /// Converts a FIT timestamp (seconds since FIT epoch) to a Date.
     public static func dateFromTimestamp(_ timestamp: UInt32) -> Date {
         epoch.addingTimeInterval(TimeInterval(timestamp))
+    }
+
+    /// Converts a Date to a FIT timestamp (seconds since FIT epoch).
+    ///
+    /// Values outside the range of a `UInt32` are clamped.
+    public static func timestamp(from date: Date) -> UInt32 {
+        let seconds = (date.timeIntervalSince(epoch)).rounded()
+        guard seconds > 0 else { return 0 }
+        guard seconds < Double(UInt32.max) else { return UInt32.max - 1 }
+        return UInt32(seconds)
+    }
+
+    /// Parses an ISO 8601 date string.
+    ///
+    /// Both fractional-second and whole-second representations are accepted,
+    /// so values written by this package and by other tools can be read.
+    ///
+    /// - Parameter string: The ISO 8601 date string.
+    /// - Returns: The parsed date, or `nil` when the string is invalid.
+    public static func date(fromISO8601 string: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: string) {
+            return date
+        }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: string)
     }
 
     /// Converts a Date to an ISO8601 string (with fractional seconds).
@@ -79,14 +114,19 @@ public enum FIT {
     /// - Parameter semicircles: The raw semicircle value (sint32).
     /// - Returns: Degrees in WGS84.
     public static func degreesFromSemicircles(_ semicircles: Int32) -> Double {
-        Double(semicircles) * (180.0 / 2147483648.0)
+        Double(semicircles) / semicirclesPerDegree
     }
 
     /// Converts decimal degrees to a FIT semicircle value.
+    ///
+    /// The value is rounded to the nearest semicircle and clamped to the
+    /// representable `sint32` range.
+    ///
     /// - Parameter degrees: The latitude or longitude in WGS84.
     /// - Returns: The raw semicircle value (sint32).
     public static func semicirclesFromDegrees(_ degrees: Double) -> Int32 {
-        let scaled = degrees * (2147483648.0 / 180.0)
+        guard degrees.isFinite else { return 0 }
+        let scaled = (degrees * semicirclesPerDegree).rounded()
         let clamped = max(Double(Int32.min), min(Double(Int32.max), scaled))
         return Int32(clamped)
     }
