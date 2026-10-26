@@ -8,11 +8,14 @@ struct SimpleFITTests {
     @Test
     func decoderThrowsOnEmptyData() async throws {
         do {
-            let _ = try FITDecoder.decode(data: Data())
-            #expect(Bool(false), "Should have thrown")
+            _ = try FITDecoder.decode(data: Data())
+            Issue.record("Expected an invalid-file error")
         }
-        catch {
-            #expect(Bool(true))
+        catch let error as FITDecoder.DecoderError {
+            guard case .invalidFile = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
         }
     }
 
@@ -20,11 +23,15 @@ struct SimpleFITTests {
     func decoderThrowsOnInvalidHeader() async throws {
         let data = Data([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
         do {
-            let _ = try FITDecoder.decode(data: data)
-            #expect(Bool(false), "Should have thrown")
+            _ = try FITDecoder.decode(data: data)
+            Issue.record("Expected an invalid-header-size error")
         }
-        catch {
-            #expect(Bool(true))
+        catch let error as FITDecoder.DecoderError {
+            guard case .invalidHeaderSize(let size) = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+            #expect(size == 0)
         }
     }
 
@@ -117,20 +124,26 @@ struct SimpleFITTests {
         guard let data = makeMinimalFIT() else { return }
         let fc = try FITCoder.read(from: data)
         guard let track = fc.features.first else { return }
-        
-        // Middle half of the track
-        let mids = track.fitPointFeatures(fraction: 0.33, to: 0.66)
-        // With only 3 points, there might be 0-2 in the middle half
-        #expect(mids.features.count <= 2)
+
+        // The middle third of the three-point track contains exactly the
+        // middle record.
+        let middle = track.fitPointFeatures(fraction: 0.33, to: 0.66)
+        #expect(middle.features.count == 1)
+        #expect(middle.features.first?.properties["heart_rate"] as? Int == 145)
     }
 
     @Test
-    func cumulativeDistancesWork() async throws {
+    func distanceSliceIncludesOnlyPointsInsideTheWindow() async throws {
         guard let data = makeMinimalFIT() else { return }
         let fc = try FITCoder.read(from: data)
-        guard let track = fc.features.first, let ml = track.geometry as? MultiLineString else { return }
-        let coords = ml.lineStrings.flatMap { $0.coordinates }
-        #expect(coords.count == 3)
+        guard let track = fc.features.first else { return }
+
+        let startOnly = track.fitPointFeatures(from: 0.0, to: 0.0)
+        #expect(startOnly.features.count == 1)
+        #expect(startOnly.features.first?.properties["heart_rate"] as? Int == 120)
+
+        let everything = track.fitPointFeatures(from: 0.0, to: 1_000_000.0)
+        #expect(everything.features.count == 3)
     }
 
     @Test
@@ -214,7 +227,7 @@ struct SimpleFITTests {
     func altitudeRoundTrip() async throws {
         guard let original = makeFITWithAltitudes() else { return }
         let fc1 = try FITCoder.read(from: original)
-        let encoded = try FITCoder.write(from: fc1)
+        let encoded = try FITCoder.write(fc1)
         let fc2 = try FITCoder.read(from: encoded)
 
         guard let track2 = fc2.features.first,

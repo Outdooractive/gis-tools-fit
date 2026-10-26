@@ -97,121 +97,140 @@ struct DecoderBugFixTests {
 
     // MARK: - Compressed timestamp messages
 
-    /// Compressed timestamp headers use bit 5 as the local message number (0 or 1).
-    /// The decoder must not read an extra byte — the local message number is just
-    /// `(header >> 5) & 0x01`.
+    /// The compressed-timestamp form omits the 4-byte timestamp field. The
+    /// decoder must reconstruct it from the last timestamp and the 5-bit
+    /// offset instead of consuming the following field's bytes.
     @Test
-    func compressedTimestampUsesLocalMessageNumber1() async throws {
-        var headerData = Data()
-        var mesgData = Data()
+    func compressedTimestampIsReconstructedForLocalOne() async throws {
+        let reference: UInt32 = 1_000_000_000
+        let offset: UInt8 = UInt8((reference + 7) & 0x1F)
+        let expected: UInt32 = (reference & 0xFFFF_FFE0) | UInt32(offset)
 
-        // Definition: file_id (local 0, global 0)
-        mesgData.append(0x40)
-        mesgData.append(0x00)
-        mesgData.append(0x00)
-        mesgData.append(contentsOf: le16(0))
-        mesgData.append(1)
-        mesgData.append(contentsOf: [0, 1, 0])
+        var body = Data()
+        body.append(FITTestBuilder.definition(
+            local: 1,
+            global: 20,
+            fields: [
+                (253, 4, 0x86),
+                (0, 4, 0x85),
+                (1, 4, 0x85),
+                (3, 1, 0x02),
+            ]))
 
-        // Data: file_id
-        mesgData.append(0x00)
-        mesgData.append(4)
+        // Regular record: timestamp + lat + lon + heart rate.
+        body.append(FITTestBuilder.dataHeader(local: 1))
+        body.append(FITTestBuilder.le32(reference))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(47.0)))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(11.0)))
+        body.append(140)
 
-        // Definition: record (local 1, global 20)
-        mesgData.append(0x41)
-        mesgData.append(0x00)
-        mesgData.append(0x00)
-        mesgData.append(contentsOf: le16(20))
-        mesgData.append(2)
-        mesgData.append(contentsOf: [0, 4, 5])   // lat
-        mesgData.append(contentsOf: [1, 4, 5])   // lon
+        // Compressed record: no timestamp bytes.
+        body.append(FITTestBuilder.compressedHeader(local: 1, offset: offset))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(48.0)))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(12.0)))
+        body.append(150)
 
-        // Compressed timestamp message with local message number 1
-        // Header: bit 7=1, bit 6=1, bit 5=1 (local=1), bits 4-0=time offset
-        // = 0b11100000 = 0xE0
-        mesgData.append(0xE0)  // compressed header, local=1, time_offset=0
-        mesgData.append(contentsOf: le32(semicircles(47.0)))  // lat
-        mesgData.append(contentsOf: le32(semicircles(11.0)))  // lon
-
-        // Another compressed timestamp message with local message number 0
-        // This should fail if local=0 is used (no definition for local=0 that has
-        // position fields). But we defined file_id as local=0, so this will
-        // read 1 byte (the enum field). Let's test local=1 instead.
-        mesgData.append(0xE0)  // another compressed, local=1, time_offset=0
-        mesgData.append(contentsOf: le32(semicircles(48.0)))
-        mesgData.append(contentsOf: le32(semicircles(12.0)))
-
-        // Assemble
-        headerData.append(12)
-        headerData.append(0x20)
-        headerData.append(contentsOf: le16(2100))
-        headerData.append(contentsOf: le32(UInt32(mesgData.count)))
-        headerData.append(contentsOf: [0x2E, 0x46, 0x49, 0x54])
-
-        var fileData = Data()
-        fileData.append(headerData)
-        fileData.append(mesgData)
-
-        let crc = crc16(fileData)
-        fileData.append(contentsOf: le16(crc))
-
-        // Decode
-        let messages = try FITDecoder.decode(data: fileData, verifyCRC: true)
-
-        // 1 file_id data + 2 compressed record messages = 3 messages
-        #expect(messages.count == 3)
-
-        // The compressed messages should use local=1 (record, global=20)
-        let recordMessages = messages.filter { $0.globalMessageNumber == 20 }
-        #expect(recordMessages.count == 2)
-    }
-
-    /// A compressed timestamp header with bit 5 = 0 should use local message number 0.
-    @Test
-    func compressedTimestampUsesLocalMessageNumber0() async throws {
-        var headerData = Data()
-        var mesgData = Data()
-
-        // Definition: a simple message (local 0, global 0 = file_id) with 1 field
-        mesgData.append(0x40)
-        mesgData.append(0x00)
-        mesgData.append(0x00)
-        mesgData.append(contentsOf: le16(0))
-        mesgData.append(1)
-        mesgData.append(contentsOf: [0, 1, 0])  // type: enum, 1 byte
-
-        // Regular data message: file_id
-        mesgData.append(0x00)
-        mesgData.append(4)  // type = activity
-
-        // Compressed timestamp message with local message number 0
-        // Header: bit 7=1, bit 6=1, bit 5=0 (local=0), bits 4-0=time offset
-        // = 0b11000000 = 0xC0
-        mesgData.append(0xC0)  // compressed header, local=0, time_offset=0
-        mesgData.append(5)     // type = workout (1 byte, matching the file_id definition)
-
-        // Assemble
-        headerData.append(12)
-        headerData.append(0x20)
-        headerData.append(contentsOf: le16(2100))
-        headerData.append(contentsOf: le32(UInt32(mesgData.count)))
-        headerData.append(contentsOf: [0x2E, 0x46, 0x49, 0x54])
-
-        var fileData = Data()
-        fileData.append(headerData)
-        fileData.append(mesgData)
-
-        let crc = crc16(fileData)
-        fileData.append(contentsOf: le16(crc))
-
-        // Decode
-        let messages = try FITDecoder.decode(data: fileData, verifyCRC: true)
-
-        // 1 regular data + 1 compressed = 2 messages
+        let data = FITTestBuilder.file(body: body)
+        let messages = try FITDecoder.decode(data: data, verifyCRC: true)
         #expect(messages.count == 2)
 
-        // Both should be file_id (global=0)
-        #expect(messages.allSatisfy { $0.globalMessageNumber == 0 })
+        let records = messages.filter { $0.globalMessageNumber == 20 }
+        #expect(records.count == 2)
+        #expect(records[0].fields[253] as? UInt32 == reference)
+        #expect(records[1].fields[253] as? UInt32 == expected)
+        #expect((records[1].fields[3] as? UInt8) == 150)
+        #expect((records[1].fields[0] as? Int32) == FITTestBuilder.semicircles(48.0))
+        #expect((records[1].fields[1] as? Int32) == FITTestBuilder.semicircles(12.0))
+    }
+
+    /// A time offset below the reference's low five bits belongs to the next
+    /// 32-second window.
+    @Test
+    func compressedTimestampWrapsToNextWindow() async throws {
+        let reference: UInt32 = 1_000_000_003
+        let referenceLow = UInt8(reference & 0x1F)
+        let offset: UInt8 = referenceLow == 0 ? 31 : referenceLow - 1
+        let expected: UInt32 = ((reference & 0xFFFF_FFE0) | UInt32(offset)) + 32
+
+        var body = Data()
+        body.append(FITTestBuilder.definition(
+            local: 0,
+            global: 20,
+            fields: [
+                (253, 4, 0x86),
+                (0, 4, 0x85),
+            ]))
+
+        body.append(FITTestBuilder.dataHeader(local: 0))
+        body.append(FITTestBuilder.le32(reference))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(47.0)))
+
+        body.append(FITTestBuilder.compressedHeader(local: 0, offset: offset))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(48.0)))
+
+        let data = FITTestBuilder.file(body: body)
+        let messages = try FITDecoder.decode(data: data, verifyCRC: true)
+        #expect(messages.count == 2)
+        #expect((messages[1].fields[253] as? UInt32) == expected)
+    }
+
+    /// A compressed header whose definition does not start with the timestamp
+    /// field is invalid.
+    @Test
+    func compressedTimestampRequiresTimestampFirst() async throws {
+        var body = Data()
+        body.append(FITTestBuilder.definition(
+            local: 0,
+            global: 20,
+            fields: [
+                (0, 4, 0x85),
+                (1, 4, 0x85),
+            ]))
+        body.append(FITTestBuilder.dataHeader(local: 0))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(47.0)))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(11.0)))
+        body.append(FITTestBuilder.compressedHeader(local: 0, offset: 1))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(48.0)))
+
+        let data = FITTestBuilder.file(body: body)
+        do {
+            _ = try FITDecoder.decode(data: data, verifyCRC: true)
+            Issue.record("Expected a compressed-timestamp decoding error")
+        }
+        catch let error as FITDecoder.DecoderError {
+            guard case .compressedTimestampWithoutTimestamp = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+        }
+    }
+
+    /// A compressed message without any preceding timestamp cannot be
+    /// resolved.
+    @Test
+    func compressedTimestampRequiresReference() async throws {
+        var body = Data()
+        body.append(FITTestBuilder.definition(
+            local: 0,
+            global: 20,
+            fields: [
+                (253, 4, 0x86),
+                (0, 4, 0x85),
+            ]))
+        body.append(FITTestBuilder.compressedHeader(local: 0, offset: 1))
+        body.append(FITTestBuilder.sint32(FITTestBuilder.semicircles(47.0)))
+
+        let data = FITTestBuilder.file(body: body)
+        do {
+            _ = try FITDecoder.decode(data: data, verifyCRC: true)
+            Issue.record("Expected a missing-reference decoding error")
+        }
+        catch let error as FITDecoder.DecoderError {
+            guard case .compressedTimestampWithoutReference = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+        }
     }
 
     // MARK: - CRC-16/ARC (Dynastream CRC)
