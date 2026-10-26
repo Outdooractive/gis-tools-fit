@@ -1,8 +1,8 @@
 # Getting started
 
-`GISToolsFIT` reads and writes FIT 2.0 activity files. It builds on
-[GISTools](https://github.com/Outdooractive/gis-tools) and uses the same
-`FeatureCollection` model as the other `gis-tools-*` packages.
+`GISToolsFIT` reads and writes FIT 2.0 activity files. It uses the same
+`FeatureCollection` model as the other `gis-tools-*` packages and builds on
+the GISTools library.
 
 ## Requirements
 
