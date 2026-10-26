@@ -143,12 +143,18 @@ enum FITDecoder {
 
         mutating func readUInt64(le: Bool = true) throws -> UInt64 {
             let bytes = try readBytes(8)
+            var value: UInt64 = 0
             if le {
-                return UInt64(bytes[0]) | (UInt64(bytes[1]) << 8) | (UInt64(bytes[2]) << 16) | (UInt64(bytes[3]) << 24)
-                    | (UInt64(bytes[4]) << 32) | (UInt64(bytes[5]) << 40) | (UInt64(bytes[6]) << 48) | (UInt64(bytes[7]) << 56)
+                for (index, byte) in bytes.enumerated() {
+                    value |= UInt64(byte) << (UInt64(index) * 8)
+                }
             }
-            return UInt64(bytes[7]) | (UInt64(bytes[6]) << 8) | (UInt64(bytes[5]) << 16) | (UInt64(bytes[4]) << 24)
-                | (UInt64(bytes[3]) << 32) | (UInt64(bytes[2]) << 40) | (UInt64(bytes[1]) << 48) | (UInt64(bytes[0]) << 56)
+            else {
+                for (index, byte) in bytes.enumerated() {
+                    value |= UInt64(byte) << (UInt64(bytes.count - 1 - index) * 8)
+                }
+            }
+            return value
         }
 
         // MARK: - File header
