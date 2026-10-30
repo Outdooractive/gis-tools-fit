@@ -71,7 +71,7 @@ let data = try collection.fitData()
 ```
 
 The collection must contain a track feature with `fit_type == "record"` and a
-`MultiLineString` geometry. See <doc:WritingAndRoundTrips> for the exact
+`MultiLineString` geometry. See [Writing and round-trips][writingandroundtrips] for the exact
 contract.
 
 ## Errors
@@ -85,4 +85,7 @@ All public operations throw ``FITError``:
 | `.parseError` | The bytes are not a decodable FIT file |
 | `.invalidFile` | The value cannot be encoded as FIT |
 
-See <doc:ReadingTracks> to learn how messages map to features.
+See [Reading tracks and sensor data][readingtracks] to learn how messages map to features.
+
+[writingandroundtrips]: https://swiftpackageindex.com/Outdooractive/gis-tools-fit/documentation/gistoolsfit/writingandroundtrips
+[readingtracks]: https://swiftpackageindex.com/Outdooractive/gis-tools-fit/documentation/gistoolsfit/readingtracks
