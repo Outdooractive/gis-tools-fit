@@ -73,7 +73,7 @@ Not guaranteed:
 - Unknown/vendor messages are ignored.
 - Unknown fields are kept as `field_<number>` strings for inspection and are
   dropped on re-encode.
-- Developer fields are skipped (see <doc:Limitations>).
+- Developer fields are skipped (see [Limitations][limitations]).
 - Records without GPS are omitted when other records have a GPS fix.
 - Point-feature reconstruction always produces a single line string.
 
@@ -91,3 +91,5 @@ catch let error as FITError {
 Encoding limits are enforced: at most 16 local message definitions, 255 fields
 per definition, and 255 bytes per field. Values that cannot be represented by a
 field's base type throw instead of being silently truncated.
+
+[limitations]: https://swiftpackageindex.com/Outdooractive/gis-tools-fit/documentation/gistoolsfit/limitations
