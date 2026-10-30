@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-30
+
 ### Added
 
 - `FITCoder.write(_:options:)` and `FITCoder.write(_:to:options:)` overloads,
@@ -29,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Updated the `gis-tools` dependency pin to `3.0.0-beta.5` and refreshed
+- Updated the `gis-tools` dependency pin to `3.0.0` and refreshed
   `Package.resolved`.
 - `FITError` now includes `.fileWriteError`; file read and write failures are
   wrapped instead of leaking Foundation errors.

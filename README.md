@@ -47,10 +47,10 @@ tvOS (≥ tvOS 15), watchOS (≥ watchOS 7), Linux, Android and Wasm.
 dependencies: [
     .package(
         url: "https://github.com/Outdooractive/gis-tools",
-        exact: "3.0.0-beta.5"),
+        from: "3.0.0"),
     .package(
         url: "https://github.com/Outdooractive/gis-tools-fit",
-        from: "3.0.0-beta.1"),
+        from: "3.0.0"),
 ],
 targets: [
     .target(name: "MyTarget", dependencies: [
